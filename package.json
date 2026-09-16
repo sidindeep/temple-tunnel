@@ -1,0 +1,78 @@
+{
+  "name": "temple-tunnel",
+  "version": "0.14.1",
+  "description": "Windows VLESS client with simple per-app tunneling",
+  "main": "src/main.js",
+  "author": "Local build",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis",
+    "build:guard": "cmd /c tools/build-network-guard.cmd"
+  },
+  "build": {
+    "appId": "local.templetunnel.app",
+    "productName": "Temple Tunnel",
+    "artifactName": "Temple-Tunnel-Setup-${version}.${ext}",
+    "asar": true,
+    "npmRebuild": false,
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/core-host",
+        "to": "bin",
+        "filter": [
+          "core-host.exe"
+        ]
+      },
+      {
+        "from": "vendor/sing-box",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "vendor/xray",
+        "to": "bin/xray",
+        "filter": [
+          "xray.exe",
+          "LICENSE"
+        ]
+      },
+      {
+        "from": "vendor/network-guard",
+        "to": "bin",
+        "filter": [
+          "network-guard.exe"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": "nsis",
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Temple Tunnel",
+      "include": "build/installer.nsh"
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.1.1",
+    "electron-builder": "^26.15.3",
+    "qrcode": "1.5.4"
+  },
+  "dependencies": {
+    "jsqr": "1.4.0"
+  }
+}

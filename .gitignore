@@ -1,0 +1,37 @@
+node_modules/
+.pnpm-store/
+.cache/
+dist/
+artifacts/
+Speed results/
+.state/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.private.pem
+signing.pem
+*.key
+*.p12
+*.pfx
+settings.json
+Local State
+MoriVPN-Setup-*.exe
+Enable-BlackTemple-Selective.ps1
+Start-BlackTemple-Selective.ps1
+Stop-BlackTemple-Selective.ps1
+tools/selective_vpn.py
+vendor/sing-box/*
+!vendor/sing-box/.gitkeep
+!vendor/sing-box/sing-box.exe
+!vendor/sing-box/LICENSE
+!vendor/sing-box/rules/
+!vendor/sing-box/rules/*.srs
+!vendor/sing-box/rules/README.md
+!vendor/xray/
+!vendor/xray/xray.exe
+!vendor/xray/LICENSE
+vendor/download/
+npm-debug.log*
+*.log
+vendor/network-guard/*.obj

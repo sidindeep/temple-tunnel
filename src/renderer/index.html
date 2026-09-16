@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;" />
+    <title>Temple Tunnel</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">T</div>
+          <div><strong>Temple</strong><span>Tunnel</span></div>
+        </div>
+
+        <nav>
+          <button class="nav active" data-page="home"><span>◈</span> Главная</button>
+          <button class="nav" data-page="subscription"><span>⌁</span> Подписка</button>
+          <button class="nav" data-page="routing"><span>⇄</span> Маршруты и DNS</button>
+          <button class="nav" data-page="logs"><span>≡</span> Журнал</button>
+        </nav>
+
+        <div class="privacy-note">
+          <span>◆</span>
+          <p>Ключ подписки хранится зашифрованно средствами Windows.</p>
+        </div>
+        <div class="version">Версия 0.14.1</div>
+      </aside>
+
+      <main>
+        <header>
+          <div>
+            <p class="eyebrow">ЛОКАЛЬНЫЙ VPN-КЛИЕНТ</p>
+            <h1>Управление подключением</h1>
+          </div>
+          <div id="statusBadge" class="status-badge offline" role="status" aria-live="polite"><i></i><span>Не подключено</span></div>
+        </header>
+
+        <section id="homePage" class="page active">
+          <div id="contentGrid" class="content-grid">
+            <section id="applicationsPanel" class="panel applications-panel">
+              <div class="panel-heading">
+                <div><p class="eyebrow">ПРИЛОЖЕНИЯ</p><h2 id="applicationsTitle">Раздельное туннелирование</h2></div>
+                <button id="addAppButton" class="primary small" type="button">＋ Добавить</button>
+              </div>
+              <p id="applicationsHelper" class="helper">Выберите программы, которые будут работать через VPN.</p>
+              <div id="applicationList" class="application-list"></div>
+              <div id="emptyApps" class="empty-state">
+                <div class="empty-icon">＋</div>
+                <strong id="emptyAppsTitle">Приложения не добавлены</strong>
+                <span id="emptyAppsText">Нажмите «Добавить» и выберите EXE-файл.</span>
+              </div>
+            </section>
+
+            <section class="panel servers-panel">
+              <div class="panel-heading">
+                <div><p class="eyebrow">СЕРВЕРЫ</p><h2>VPN <span id="pingStatus" class="panel-meta"></span></h2></div>
+                <button id="refreshButton" class="icon-button" type="button" title="Обновить пинг серверов" aria-label="Обновить пинг серверов" disabled>↻</button>
+              </div>
+              <label class="connection-strategy" for="connectionStrategy">Подключение
+                <select id="connectionStrategy">
+                  <option value="auto">Авто — рабочий сервер подписки</option>
+                  <option value="manual">Только выбранный сервер</option>
+                </select>
+              </label>
+              <div id="activeSubscriptionName" class="active-subscription-name"></div>
+              <div id="serverList" class="server-list"></div>
+              <div id="emptyServers" class="empty-state compact">
+                <strong>Добавьте подписку</strong>
+                <span>Серверы появятся здесь автоматически.</span>
+              </div>
+            </section>
+          </div>
+
+          <section class="connection-card">
+            <div class="connection-summary">
+              <div id="serverFlag" class="server-flag">◌</div>
+              <div><strong id="selectedServerName">Сервер не выбран</strong><span id="selectedServerDetails">Добавьте VLESS-подписку</span></div>
+            </div>
+            <button id="powerButton" class="power" type="button" aria-label="Подключить" aria-pressed="false" disabled><span></span></button>
+            <div class="mode-switcher" role="group" aria-label="Режим туннелирования">
+              <button data-mode="full">Полная защита</button>
+              <button data-mode="selected" class="active">Только выбранные</button>
+              <button data-mode="bypass">Все, кроме выбранных</button>
+            </div>
+            <div id="modeDescription" class="mode-description"></div>
+            <label id="russianSitesControl" class="russian-sites-control" hidden>
+              <input id="russianSitesViaVpn" type="checkbox" checked />
+              <span>Российские сайты через VPN</span>
+            </label>
+          </section>
+          <div id="warningBanner" class="warning-banner" role="status" aria-live="polite" hidden>
+            <span id="warningText"></span>
+            <button id="cancelReconnectButton" class="warning-action" type="button">Остановить</button>
+          </div>
+          <div id="errorBanner" class="error-banner" role="alert" hidden></div>
+        </section>
+
+        <section id="subscriptionPage" class="page">
+          <section class="panel form-panel subscription-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">ПОДПИСКИ</p><h2>Мои VPN-подписки</h2></div>
+              <button id="refreshSubscriptionButton" class="secondary small" type="button" disabled>↻ Обновить активную</button>
+            </div>
+            <p class="helper">Добавляйте несколько подписок и переключайтесь между ними. Ссылки и ключи хранятся зашифрованно.</p>
+
+            <div class="saved-subscriptions">
+              <h3>Сохранённые подписки</h3>
+              <div id="subscriptionList" class="subscription-list"></div>
+              <details id="hiddenSubscriptions" class="hidden-subscriptions" hidden>
+                <summary id="hiddenSubscriptionsTitle">Скрытые подписки</summary>
+                <div id="hiddenSubscriptionList" class="subscription-list"></div>
+              </details>
+              <div id="emptySubscriptions" class="subscription-empty">Подписок пока нет.</div>
+            </div>
+
+            <form id="subscriptionForm">
+              <h3 id="subscriptionFormTitle">Добавить подписку</h3>
+              <label for="subscriptionName">Название</label>
+              <input id="subscriptionName" type="text" maxlength="80" autocomplete="off" placeholder="Например, Основная или Резервная" />
+              <label id="subscriptionSourceLabel" for="subscriptionUrl">Ссылка подписки или ключ VLESS / Hysteria 2</label>
+              <div class="secret-input">
+                <textarea id="subscriptionUrl" class="masked-secret" rows="3" maxlength="262144" autocomplete="off" spellcheck="false" placeholder="https://…/sub/… или ключи — по одному на строку"></textarea>
+                <button id="revealButton" type="button" class="icon-button" title="Показать или скрыть ключ" aria-label="Показать или скрыть ключ">◉</button>
+              </div>
+              <div class="subscription-form-actions">
+                <button id="importTextButton" class="secondary" type="button">Из файла</button>
+                <button id="importQrButton" class="secondary" type="button">QR из картинки</button>
+                <button id="subscriptionSubmitButton" class="primary" type="submit">Добавить и загрузить серверы</button>
+                <button id="cancelSubscriptionEditButton" class="secondary" type="button" hidden>Отмена</button>
+              </div>
+            </form>
+            <div id="subscriptionStatus" class="subscription-status"></div>
+            <p id="importReport" class="helper" role="status">QR распознаётся на компьютере. Камера не нужна; выберите PNG или JPEG с одним QR-кодом.</p>
+          </section>
+        </section>
+
+        <section id="routingPage" class="page">
+          <form id="routingForm" class="panel routing-panel">
+            <div class="panel-heading"><div><p class="eyebrow">СЕТЬ</p><h2>Маршруты и DNS</h2></div></div>
+            <p class="helper">Один домен, IP-адрес или подсеть на строку. Домен включает поддомены. Например: example.com или 203.0.113.0/24.</p>
+            <div class="routing-columns">
+              <label>Через VPN<textarea id="routeProxy" rows="6" maxlength="65536" spellcheck="false" placeholder="example.com"></textarea></label>
+              <label>Напрямую<textarea id="routeDirect" rows="6" maxlength="65536" spellcheck="false" placeholder="example.org"></textarea></label>
+              <label>Блокировать<textarea id="routeBlock" rows="6" maxlength="65536" spellcheck="false" placeholder="ads.example.net"></textarea></label>
+            </div>
+            <p class="helper">Эти правила действуют во всех режимах и имеют приоритет над списками приложений и российских адресов. При пересечении списков порядок такой: блокировка → VPN → напрямую. Локальная сеть и служебные соединения VPN сохраняют прямой маршрут.</p>
+            <label for="dnsPreset">DNS для запросов через VPN</label>
+            <select id="dnsPreset">
+              <option value="legacy">Cloudflare · автоматически (HTTPS для Xray)</option>
+              <option value="cloudflare">Cloudflare · DNS over HTTPS</option>
+              <option value="google">Google · DNS over HTTPS</option>
+              <option value="quad9">Quad9 · DNS over HTTPS</option>
+            </select>
+            <p class="helper">DNS для прямых маршрутов остаётся системным. Доменные правила применяются и к DNS; правила IP-подсетей — к соединениям. Приложения с собственным зашифрованным DNS могут обходить доменные правила.</p>
+            <label for="dnsPolicy">Куда отправлять DNS</label>
+            <select id="dnsPolicy"><option value="routing">Следовать правилам маршрутизации</option><option value="vpn">Все публичные DNS-запросы через VPN</option></select>
+            <label for="ipv6Policy">IPv6 при работающем VPN</label>
+            <select id="ipv6Policy"><option value="block">Перехватывать и блокировать IPv6</option><option value="tunnel">Передавать IPv6 через туннель по правилам</option></select>
+            <label for="killSwitch">Kill switch — защита при отключении</label>
+            <select id="killSwitch"><option value="off">Выключен</option><option value="session">Во время подключения и при сбое</option><option value="always">Всегда, включая закрытое приложение</option></select>
+            <p class="helper">В первом режиме защита снимается при ручном отключении или обычном выходе. В постоянном режиме — только при выборе «Выключен». При аварии блокировка сохраняется. Для правил приложений нужны их EXE-файлы. Пользовательские маршруты «Через VPN» в режиме «Только выбранные» расширяют блокировку на весь компьютер при отключении.</p>
+            <p id="guardStatus" class="helper" role="status"></p>
+            <p class="helper">При блокировке без VPN системный DNS также закрыт: у прямых приложений могут временно не открываться новые домены. Служебные соединения клиента и VPN-ядер разрешены для восстановления. Kill switch этой версии ещё требует проверки сетевых пакетов на Windows с правами администратора.</p>
+            <button id="diagnoseNetworkButton" class="secondary" type="button">Проверить DNS и соединение</button>
+            <p id="networkDiagnostics" class="helper" role="status"></p>
+            <button id="saveRoutingButton" class="primary" type="submit">Сохранить и применить</button>
+            <p class="helper">При активном VPN применение изменений переподключит туннель.</p>
+            <div id="routingStatus" role="status" aria-live="polite"></div>
+          </form>
+        </section>
+
+        <section id="logsPage" class="page">
+          <section class="panel form-panel">
+            <h2>Обновления</h2>
+            <p class="helper">Выберите подписанный пакет обновления. Подпись и контрольные суммы проверяются до установки. Предыдущую версию можно восстановить.</p>
+            <button id="installUpdateButton" class="secondary" type="button">Выбрать пакет обновления</button>
+            <button id="rollbackUpdateButton" class="secondary" type="button">Откатить обновление</button>
+            <p id="updateStatus" class="helper" role="status"></p>
+          </section>
+          <section class="panel logs-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">ДИАГНОСТИКА</p><h2>Журнал подключения</h2></div>
+              <div><button id="openLogsButton" class="secondary" type="button">Открыть папку</button>
+              <button id="exportLogsButton" class="secondary" type="button">Экспорт журнала</button></div>
+            </div>
+            <p>Журнал на диске зашифрован. Экспорт создаёт очищенную текстовую копию.</p>
+            <pre id="logOutput">Записей пока нет.</pre>
+          </section>
+        </section>
+      </main>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
