@@ -3,6 +3,11 @@ node_modules/
 .cache/
 dist/
 artifacts/
+android/.gradle/
+android/local.properties
+android/**/build/
+android/*.jks
+android/*.keystore
 Speed results/
 .state/
 __pycache__/

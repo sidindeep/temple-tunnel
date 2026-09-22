@@ -37,6 +37,32 @@ test('cancelled candidate does not spawn a process', async () => {
   assert.equal(result.status,'cancelled');
 });
 
+test('cancellation waits for slow Windows process exit instead of reporting a startup failure', async () => {
+  const { EventEmitter } = require('node:events');
+  const { PassThrough } = require('node:stream');
+  const controller = new AbortController();
+  let exitReported = false;
+  const result = await probeHysteria({host:'192.0.2.1',transport:'tcp',security:'none',uuid:'test',port:443}, 'unused', null, {
+    signal: controller.signal,
+    spawnProcess() {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      let stopping = false;
+      child.kill = () => {
+        if (!stopping) {
+          stopping = true;
+          setTimeout(() => { exitReported = true; child.emit('exit', 1); }, 1200);
+        }
+        return true;
+      };
+      setImmediate(() => controller.abort());
+      return child;
+    }
+  });
+  assert.equal(result.status, 'cancelled');
+  assert.equal(exitReported, true);
+});
+
 test('cancellation kills a real proxy process, removes its config and never creates TUN', async () => {
   const fs = require('node:fs');
   const {spawn} = require('node:child_process');

@@ -21,13 +21,13 @@ test('selected mode sends only listed processes to proxy', () => {
     ruleSetPaths: { geoipRu: 'geoip-ru.srs', geositeRu: 'geosite-category-ru.srs' }
   });
   assert.equal(config.route.final, 'direct');
-  const rule = config.route.rules.find((item) => item.process_name?.includes('Telegram.exe'));
-  assert.deepEqual(rule.process_name, ['Telegram.exe']);
+  const rule = config.route.rules.find((item) => item.process_path?.includes('C:\\Apps\\Telegram.exe'));
+  assert.deepEqual(rule.process_path, ['C:\\Apps\\Telegram.exe']);
   assert.equal(rule.outbound, 'proxy');
   assert.equal(config.route.rules.find((item) => item.rule_set).outbound, 'direct');
   assert.equal(config.route.rules.find((item) => item.inbound === 'health-in').outbound, 'proxy');
   assert.equal(config.dns.final, 'dns-direct');
-  assert.equal(config.dns.rules.find((item) => item.process_name).server, 'dns-proxy');
+  assert.equal(config.dns.rules.find((item) => item.process_path).server, 'dns-proxy');
   assert.equal(config.dns.rules.find((item) => item.rule_set).server, 'dns-direct');
 });
 
@@ -39,9 +39,9 @@ test('bypass mode sends listed processes direct and defaults to proxy', () => {
     ruleSetPaths: { geoipRu: 'geoip-ru.srs', geositeRu: 'geosite-category-ru.srs' }
   });
   assert.equal(config.route.final, 'proxy');
-  assert.equal(config.route.rules.find((item) => item.process_name).outbound, 'direct');
+  assert.equal(config.route.rules.find((item) => item.process_path).outbound, 'direct');
   assert.equal(config.dns.final, 'dns-proxy');
-  assert.equal(config.dns.rules.find((item) => item.process_name).server, 'dns-direct');
+  assert.equal(config.dns.rules.find((item) => item.process_path).server, 'dns-direct');
 });
 
 test('full mode sends all public traffic and DNS through proxy', () => {
@@ -61,17 +61,21 @@ test('selected mode requires at least one application', () => {
   assert.throws(() => buildConfig({ server, mode: 'selected', applications: [] }), /добавьте/i);
 });
 
-test('application process rules are deduplicated case-insensitively', () => {
+test('application rules use exact paths and keep name-only fallback separate', () => {
   const config = buildConfig({
     server,
     mode: 'selected',
     applications: [
       { processName: 'Telegram.exe' },
-      { processName: 'telegram.EXE', path: 'C:\\Apps\\telegram.EXE' }
+      { processName: 'telegram.EXE', path: 'C:\\Apps\\telegram.EXE' },
+      { processName: 'telegram.exe', path: 'C:\\Other\\telegram.exe' },
+      { processName: 'TELEGRAM.EXE' }
     ]
   });
-  const rule = config.route.rules.find((item) => item.outbound === 'proxy' && item.process_name);
-  assert.deepEqual(rule.process_name, ['Telegram.exe']);
+  const nameRule = config.route.rules.find((item) => item.outbound === 'proxy' && item.process_name);
+  const pathRule = config.route.rules.find((item) => item.outbound === 'proxy' && item.process_path);
+  assert.deepEqual(nameRule.process_name, ['Telegram.exe']);
+  assert.deepEqual(pathRule.process_path, ['C:\\Apps\\telegram.EXE', 'C:\\Other\\telegram.exe']);
 });
 
 test('bypass mode allows an empty exclusion list', () => {

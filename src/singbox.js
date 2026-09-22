@@ -1,4 +1,3 @@
-const path = require('node:path');
 const { customRules, proxyDns } = require('./routing-settings');
 
 function buildTls(server) {
@@ -90,7 +89,35 @@ function buildRuleSets(ruleSetPaths) {
   ];
 }
 
-function buildDns({ mode, processNames, useRussianBypass, customRouting, dnsPreset, healthPort = 0, ipv6Policy = 'block', dnsPolicy = 'routing', directDns }) {
+function applicationRules(applications, destination) {
+  const paths = [];
+  const names = [];
+  const knownPaths = new Set();
+  const knownNames = new Set();
+  for (const application of applications) {
+    const applicationPath = String(application.path || '').trim();
+    if (applicationPath) {
+      const identity = applicationPath.toLowerCase();
+      if (!knownPaths.has(identity)) {
+        knownPaths.add(identity);
+        paths.push(applicationPath);
+      }
+      continue;
+    }
+    const processName = String(application.processName || application.name || '').trim();
+    const identity = processName.toLowerCase();
+    if (identity && !knownNames.has(identity)) {
+      knownNames.add(identity);
+      names.push(processName);
+    }
+  }
+  return [
+    ...(paths.length ? [{ process_path: paths, ...destination }] : []),
+    ...(names.length ? [{ process_name: names, ...destination }] : [])
+  ];
+}
+
+function buildDns({ mode, applications, useRussianBypass, customRouting, dnsPreset, healthPort = 0, ipv6Policy = 'block', dnsPolicy = 'routing', directDns }) {
   const rules = [
     {
       domain_suffix: ['.local', '.localhost', '.lan'],
@@ -106,9 +133,9 @@ function buildDns({ mode, processNames, useRussianBypass, customRouting, dnsPres
     rules.push({ rule_set: 'geosite-category-ru', action: 'route', server: 'dns-direct' });
   }
   if (mode === 'selected') {
-    rules.push({ process_name: processNames, action: 'route', server: 'dns-proxy' });
-  } else if (mode === 'bypass' && processNames.length) {
-    rules.push({ process_name: processNames, action: 'route', server: 'dns-direct' });
+    rules.push(...applicationRules(applications, { action: 'route', server: 'dns-proxy' }));
+  } else if (mode === 'bypass') {
+    rules.push(...applicationRules(applications, { action: 'route', server: 'dns-direct' }));
   }
 
   return {
@@ -124,17 +151,8 @@ function buildDns({ mode, processNames, useRussianBypass, customRouting, dnsPres
 
 function buildConfig({ server, applications, mode, russianSitesViaVpn = true, healthPort = 0, bridgePort = 0, tunAddress = '172.31.254.1/30', tunName = 'temple-tun', ruleSetPaths, customRouting, dnsPreset, ipv6Policy = 'block', dnsPolicy = 'routing', directDns }) {
   if (!server) throw new Error('Сначала выберите сервер.');
-  const processNames = [];
-  const knownProcesses = new Set();
-  for (const application of applications) {
-    const processName = application.processName || path.basename(application.path || application.name);
-    const identity = String(processName || '').toLowerCase();
-    if (identity && !knownProcesses.has(identity)) {
-      knownProcesses.add(identity);
-      processNames.push(processName);
-    }
-  }
-  if (mode === 'selected' && processNames.length === 0) {
+  const normalizedApplications = Array.isArray(applications) ? applications : [];
+  if (mode === 'selected' && applicationRules(normalizedApplications, {}).length === 0) {
     throw new Error('Для раздельного туннелирования добавьте хотя бы одно приложение.');
   }
 
@@ -165,9 +183,9 @@ function buildConfig({ server, applications, mode, russianSitesViaVpn = true, he
   }
 
   if (mode === 'selected') {
-    rules.push({ process_name: processNames, action: 'route', outbound: 'proxy' });
-  } else if (mode === 'bypass' && processNames.length) {
-    rules.push({ process_name: processNames, action: 'route', outbound: 'direct' });
+    rules.push(...applicationRules(normalizedApplications, { action: 'route', outbound: 'proxy' }));
+  } else if (mode === 'bypass') {
+    rules.push(...applicationRules(normalizedApplications, { action: 'route', outbound: 'direct' }));
   }
 
   return {
@@ -175,7 +193,7 @@ function buildConfig({ server, applications, mode, russianSitesViaVpn = true, he
     log: { level: 'info', timestamp: true },
     // UDP DNS over the Xray SOCKS bridge can stall while TCP traffic already works.
     // Keep the same resolver, but use HTTPS unless the user chose another provider.
-    dns: buildDns({ mode, processNames, useRussianBypass, customRouting,
+    dns: buildDns({ mode, applications: normalizedApplications, useRussianBypass, customRouting,
       dnsPreset: bridgePort && (!dnsPreset || dnsPreset === 'legacy') ? 'cloudflare' : dnsPreset, healthPort, ipv6Policy, dnsPolicy, directDns }),
     inbounds: [
       {
@@ -209,4 +227,4 @@ function buildConfig({ server, applications, mode, russianSitesViaVpn = true, he
   };
 }
 
-module.exports = { buildConfig, buildDns, buildOutbound, buildRuleSets, buildTls, buildTransport };
+module.exports = { applicationRules, buildConfig, buildDns, buildOutbound, buildRuleSets, buildTls, buildTransport };

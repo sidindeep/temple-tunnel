@@ -10,7 +10,7 @@ const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { setTimeout: delay } = require('node:timers/promises');
 
-async function harness({ strategy = 'auto', probeDelay = 5, verifyError, switchError, switchDelay = 0, allOffline = false, xhttp = false, reserveDelay = 0, hysteria = false, realityXray = false } = {}) {
+async function harness({ strategy = 'auto', probeDelay = 5, verifyError, verifyDelay = 0, switchError, switchDelay = 0, allOffline = false, xhttp = false, reserveDelay = 0, hysteria = false, realityXray = false } = {}) {
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'temple-lifecycle-'));
   const sourcePath = path.join(__dirname, '../src/main.js');
   const realRequire = createRequire(sourcePath);
@@ -23,7 +23,9 @@ async function harness({ strategy = 'auto', probeDelay = 5, verifyError, switchE
   const context = vm.createContext({
     require(name) {
       if(name==='./connection-notices')return {createConnectionNotices:()=>realRequire(name).createConnectionNotices((title,body)=>seen.notices.push({title,body}))};
-      if(name==='electron')return {net:{isOnline:()=>seen.online},app:{disableHardwareAcceleration(){},requestSingleInstanceLock:()=>true,on(){},whenReady:()=>({then(){}})},ipcMain:{handle:(name,handler)=>{handlers[name]=handler;}}};
+      if(name==='electron')return {net:{isOnline:()=>seen.online},app:{disableHardwareAcceleration(){},requestSingleInstanceLock:()=>true,
+        on(name,handler){handlers[`app:${name}`]=handler;},quit(){seen.quits=(seen.quits||0)+1;},whenReady:()=>({then(){}})},
+        ipcMain:{handle:(name,handler)=>{handlers[name]=handler;}}};
       if(name==='./tunnel-pool')return {...realRequire(name),selectOutbound:async(_pool,id,signal)=>{
         seen.switches.push(id);if(switchDelay)await delay(switchDelay,undefined,{signal});if(switchError)throw switchError;
       }};
@@ -51,7 +53,7 @@ async function harness({ strategy = 'auto', probeDelay = 5, verifyError, switchE
       return realRequire(name);
     },
     setTimeout,clearTimeout,setInterval,clearInterval,AbortController,console,process,Buffer,
-    __dirname:path.dirname(sourcePath),directory,profiles,strategy,seen,verifyError
+    __dirname:path.dirname(sourcePath),directory,profiles,strategy,seen,verifyError,verifyDelay
   });
   vm.runInContext(fs.readFileSync(sourcePath,'utf8')+`
     runtimeDir = () => directory;
@@ -64,9 +66,11 @@ async function harness({ strategy = 'auto', probeDelay = 5, verifyError, switchE
     validateCoreConfig = async () => {};
     let nextPort = 12345; allocateLoopbackPort = async () => nextPort++;
     waitForLocalPort = async () => {};
-    waitForVerifiedTunnel = async () => {seen.verified++; if(verifyError)throw verifyError;return {status:'ok',ms:5,kind:'tunnel'};};
+    waitForVerifiedTunnel = async () => {seen.verified++;if(verifyDelay)await new Promise(resolve=>setTimeout(resolve,verifyDelay));if(verifyError)throw verifyError;return {status:'ok',ms:5,kind:'tunnel'};};
     state.mode='full';state.selectedServerId='a';state.activeSubscriptionId='sub';state.connectionStrategy=strategy;
-    globalThis.start = startTunnel;globalThis.stop = stopTunnel;
+    globalThis.start = startTunnel;globalThis.stop = stopTunnel;globalThis.disconnect = manualDisconnect;
+    globalThis.activateUpdate = activateCoreUpdate;
+    globalThis.operationIds = () => ({tunnelOperationId,manualDisconnectId});
     globalThis.snapshot = () => ({status:state.status,selected:state.selectedServerId,error:state.error,
       recovery:automaticRecoveryActive,history:selectionHistory(),running:Boolean(coreProcess)});
   `,context);
@@ -306,12 +310,61 @@ test('stale cleanup without a config cannot delete a newer runtime config',async
 test('changing selection policy keeps an established healthy tunnel',async()=>{
   const h=await harness();
   try {
+    fakeGuard(h);
     await h.context.start();
+    const guardEvents=h.seen.guardEvents.length;
+    const activeTun=h.seen.guardEvents.at(-1);
     for(const connectionStrategy of ['manual','auto']) {
       const state=await h.handlers['settings:update'](null,{connectionStrategy});
       assert.equal(state.connectionStrategy,connectionStrategy);assert.equal(state.status,'connected');
     }
     assert.equal(h.seen.tunStarts,1);
+    assert.equal(h.seen.guardEvents.length,guardEvents);
+    assert.match(activeTun,/^temple-tun-/);
+  } finally {await h.dispose();}
+});
+
+test('changing permanent protection to session while disconnected clears WFP filters',async()=>{
+  const h=await harness();fakeGuard(h,'always');
+  try {
+    h.seen.guardActive=true;
+    const state=await h.handlers['settings:update'](null,{killSwitch:'session'});
+    assert.equal(state.killSwitch,'session');
+    assert.deepEqual(Array.from(h.seen.guardEvents),['clear']);
+    assert.equal(h.seen.guardActive,false);
+  } finally {await h.dispose();}
+});
+
+test('manual stop during a core update cannot reconnect the VPN later',async()=>{
+  const h=await harness({verifyDelay:80});
+  try {
+    await h.context.start();
+    vm.runInContext(`checkCoreUpdate=async()=>{};signedUpdates={
+      activate:async generation=>generation,
+      rollbackCores:async()=>{seen.rollbacks=(seen.rollbacks||0)+1;return null;}
+    };`,h.context);
+    const pending=h.context.activateUpdate({id:'new',directory:h.context.directory,manifest:{kind:'cores'}});
+    while(h.seen.tunStarts<2)await delay(1);
+    await h.context.disconnect();
+    assert.equal(h.context.operationIds().manualDisconnectId,1);
+    const message=await pending;
+    assert.match(message,/остановлен.*пользователем/);
+    assert.equal(h.seen.tunStarts,2);
+    assert.equal(h.seen.rollbacks||0,0);
+    assert.equal(h.context.snapshot().status,'disconnected');
+  } finally {await h.dispose();}
+});
+
+test('normal exit clears session protection even when encrypted logging is unavailable',async()=>{
+  const h=await harness();fakeGuard(h,'session');
+  try {
+    h.seen.guardActive=true;
+    let prevented=false;
+    h.handlers['app:before-quit']({preventDefault(){prevented=true;}});
+    while(!h.seen.quits)await delay(1);
+    assert.equal(prevented,true);
+    assert.deepEqual(Array.from(h.seen.guardEvents),['clear']);
+    assert.equal(h.seen.guardActive,false);
   } finally {await h.dispose();}
 });
 

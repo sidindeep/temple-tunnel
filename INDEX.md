@@ -1,0 +1,18 @@
+# Project instruction index
+
+- [Project entrypoint](AGENTS.md)
+- [Command index](COMMANDS.md)
+- [GI command contracts](patterns/GI_COMMAND_CONTRACTS.md)
+- [Startup](patterns/AGENTS_RUNTIME/07-startup.md)
+- [Scope and evidence](patterns/AGENTS_RUNTIME/07-scope-and-evidence.md)
+- [Config service](patterns/AGENTS_RUNTIME/08-config-service.md)
+- [Task manager](patterns/AGENTS_RUNTIME/08-task-manager.md)
+- [Sprints](patterns/AGENTS_RUNTIME/08-sprint.md)
+- [Production](patterns/AGENTS_RUNTIME/09-production.md)
+- [Deploy gateway](patterns/AGENTS_RUNTIME/09-deploy-gateway.md)
+- [FTP](patterns/AGENTS_RUNTIME/09-ftp.md)
+- [Runtime and defaults](patterns/AGENTS_RUNTIME/09-runtime-and-defaults.md)
+- [Testing](patterns/AGENTS_RUNTIME/09-testing.md)
+- [Build and install](patterns/AGENTS_RUNTIME/09-build-and-install.md)
+- [Project memory operations](patterns/AGENTS_RUNTIME/09-project-memory-operations.md)
+- [Git workflow](patterns/GIT_WORKFLOW.md)

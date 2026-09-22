@@ -17,6 +17,7 @@
 
         <nav>
           <button class="nav active" data-page="home"><span>◈</span> Главная</button>
+          <button class="nav" data-page="connection"><span>⏣</span> Управление подключением</button>
           <button class="nav" data-page="subscription"><span>⌁</span> Подписка</button>
           <button class="nav" data-page="routing"><span>⇄</span> Маршруты и DNS</button>
           <button class="nav" data-page="logs"><span>≡</span> Журнал</button>
@@ -33,17 +34,59 @@
         <header>
           <div>
             <p class="eyebrow">ЛОКАЛЬНЫЙ VPN-КЛИЕНТ</p>
-            <h1>Управление подключением</h1>
+            <h1 id="pageTitle">Главная</h1>
           </div>
           <div id="statusBadge" class="status-badge offline" role="status" aria-live="polite"><i></i><span>Не подключено</span></div>
         </header>
 
         <section id="homePage" class="page active">
+          <div class="dashboard">
+            <section class="panel home-servers">
+              <div class="panel-heading"><h2>Серверы</h2><span id="homeServerCount" class="panel-meta"></span></div>
+              <input id="serverSearch" type="search" placeholder="Поиск серверов" aria-label="Поиск серверов" autocomplete="off" />
+              <div id="homeSubscriptionName" class="active-subscription-name"></div>
+              <label class="connection-strategy" for="connectionStrategy">Подключение
+                <select id="connectionStrategy">
+                  <option value="auto">Авто — рабочий сервер подписки</option>
+                  <option value="manual">Только выбранный сервер</option>
+                </select>
+              </label>
+              <div id="homeServerList" class="server-list"></div>
+              <div id="homeEmptyServers" class="empty-state compact" role="status"></div>
+              <button id="homeSubscriptionsButton" class="secondary" type="button">Мои подписки</button>
+            </section>
+            <section class="panel home-connection">
+              <label class="home-mode" for="homeMode">Режим туннелирования
+                <select id="homeMode">
+                  <option value="full">Полная защита</option>
+                  <option value="selected">Только выбранные приложения</option>
+                  <option value="bypass" selected>Все, кроме выбранных</option>
+                </select>
+              </label>
+              <div class="home-power-area">
+                <button id="homePowerButton" class="home-power" type="button" aria-label="Подключить VPN" aria-pressed="false" disabled>
+                  <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 7v18M14 12a17 17 0 1 0 20 0" /></svg>
+                </button>
+                <strong id="homeConnectionStatus" role="status" aria-live="polite">Не подключено</strong>
+                <p id="homeConnectionHint" class="helper"></p>
+              </div>
+              <div class="home-selected-server">
+                <div id="homeServerFlag" class="server-flag">◌</div>
+                <strong id="homeServerName">Сервер не выбран</strong>
+                <span id="homeServerDetails" class="helper">Добавьте подписку</span>
+                <button id="homePingButton" class="primary" type="button" disabled>Тест пинга</button>
+                <button id="homeManageButton" class="home-manage" type="button">Управление подключением →</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="connectionPage" class="page">
           <div id="contentGrid" class="content-grid">
             <section id="applicationsPanel" class="panel applications-panel">
               <div class="panel-heading">
                 <div><p class="eyebrow">ПРИЛОЖЕНИЯ</p><h2 id="applicationsTitle">Раздельное туннелирование</h2></div>
-                <button id="addAppButton" class="primary small" type="button">＋ Добавить</button>
+                <div class="app-actions"><button id="addAppButton" class="primary small" type="button">＋ EXE-файл</button><button id="listProcessesButton" class="secondary small" type="button">Диспетчер задач</button></div>
               </div>
               <p id="applicationsHelper" class="helper">Выберите программы, которые будут работать через VPN.</p>
               <div id="applicationList" class="application-list"></div>
@@ -52,26 +95,13 @@
                 <strong id="emptyAppsTitle">Приложения не добавлены</strong>
                 <span id="emptyAppsText">Нажмите «Добавить» и выберите EXE-файл.</span>
               </div>
+              <div id="runningProcesses" class="running-processes" hidden>
+                <div class="running-processes-heading"><strong>Запущенные процессы</strong><button id="closeProcessesButton" class="icon-button" type="button" aria-label="Закрыть">×</button></div>
+                <input id="processSearch" type="search" placeholder="Поиск процесса, например chrome.exe" autocomplete="off" />
+                <div id="runningProcessList" class="running-process-list"></div>
+              </div>
             </section>
 
-            <section class="panel servers-panel">
-              <div class="panel-heading">
-                <div><p class="eyebrow">СЕРВЕРЫ</p><h2>VPN <span id="pingStatus" class="panel-meta"></span></h2></div>
-                <button id="refreshButton" class="icon-button" type="button" title="Обновить пинг серверов" aria-label="Обновить пинг серверов" disabled>↻</button>
-              </div>
-              <label class="connection-strategy" for="connectionStrategy">Подключение
-                <select id="connectionStrategy">
-                  <option value="auto">Авто — рабочий сервер подписки</option>
-                  <option value="manual">Только выбранный сервер</option>
-                </select>
-              </label>
-              <div id="activeSubscriptionName" class="active-subscription-name"></div>
-              <div id="serverList" class="server-list"></div>
-              <div id="emptyServers" class="empty-state compact">
-                <strong>Добавьте подписку</strong>
-                <span>Серверы появятся здесь автоматически.</span>
-              </div>
-            </section>
           </div>
 
           <section class="connection-card">
@@ -79,23 +109,23 @@
               <div id="serverFlag" class="server-flag">◌</div>
               <div><strong id="selectedServerName">Сервер не выбран</strong><span id="selectedServerDetails">Добавьте VLESS-подписку</span></div>
             </div>
-            <button id="powerButton" class="power" type="button" aria-label="Подключить" aria-pressed="false" disabled><span></span></button>
             <div class="mode-switcher" role="group" aria-label="Режим туннелирования">
               <button data-mode="full">Полная защита</button>
-              <button data-mode="selected" class="active">Только выбранные</button>
-              <button data-mode="bypass">Все, кроме выбранных</button>
+              <button data-mode="selected">Только выбранные</button>
+              <button data-mode="bypass" class="active">Все, кроме выбранных</button>
             </div>
             <div id="modeDescription" class="mode-description"></div>
+            <form id="siteExceptionForm" class="site-exception-form">
+              <label for="siteExceptionInput">Исключить сайт из VPN</label>
+              <div><input id="siteExceptionInput" type="text" placeholder="vk.ru" maxlength="253" autocomplete="off" /><button class="secondary small" type="submit">Добавить</button></div>
+              <span id="siteExceptionStatus">Домен и его поддомены будут открываться напрямую.</span>
+              <div id="siteExceptionList" class="site-exception-list"></div>
+            </form>
             <label id="russianSitesControl" class="russian-sites-control" hidden>
               <input id="russianSitesViaVpn" type="checkbox" checked />
               <span>Российские сайты через VPN</span>
             </label>
           </section>
-          <div id="warningBanner" class="warning-banner" role="status" aria-live="polite" hidden>
-            <span id="warningText"></span>
-            <button id="cancelReconnectButton" class="warning-action" type="button">Остановить</button>
-          </div>
-          <div id="errorBanner" class="error-banner" role="alert" hidden></div>
         </section>
 
         <section id="subscriptionPage" class="page">
@@ -190,6 +220,11 @@
             <pre id="logOutput">Записей пока нет.</pre>
           </section>
         </section>
+        <div id="warningBanner" class="warning-banner" role="status" aria-live="polite" hidden>
+          <span id="warningText"></span>
+          <button id="cancelReconnectButton" class="warning-action" type="button">Остановить</button>
+        </div>
+        <div id="errorBanner" class="error-banner" role="alert" hidden></div>
       </main>
     </div>
     <script src="app.js"></script>

@@ -73,6 +73,7 @@ async function launchSignedInstaller(generation) {
 }
 let networkGuard;
 let activeTunName = '-';
+let manualDisconnectId = 0;
 function guardCores() { return [process.execPath, corePath(), xrayPath()]; }
 async function armGuard(tun = '-') {
   if (state.killSwitch === 'off') return;
@@ -80,6 +81,7 @@ async function armGuard(tun = '-') {
   await networkGuard.apply(state, guardCores(), tun);
 }
 async function manualDisconnect() {
+  manualDisconnectId += 1;
   await stopTunnel({ immediate: true });
   activeTunName = '-';
   if (state.killSwitch === 'session') await networkGuard?.clear();
@@ -162,6 +164,7 @@ const SUGGESTED_APPLICATIONS = [
   { name: 'Microsoft Edge', processName: 'msedge.exe', glyph: 'E' },
   { name: 'Firefox', processName: 'firefox.exe', glyph: 'F' }
 ];
+const DEFAULT_TUNNEL_MODE = 'bypass';
 let state = {
   subscriptionEncrypted: '',
   serversEncrypted: '',
@@ -170,7 +173,7 @@ let state = {
   selectedServerId: '',
   selectedApplications: [],
   bypassApplications: [],
-  mode: 'selected',
+  mode: DEFAULT_TUNNEL_MODE,
   russianSitesViaVpn: true,
   connectionStrategy: 'auto',
   customRouting: { proxy: [], direct: [], block: [] },
@@ -232,7 +235,7 @@ async function loadState() {
     state.selectedApplications = selectedApplications;
     state.bypassApplications = bypassApplications;
     if (!['full', 'selected', 'bypass'].includes(state.mode)) {
-      state.mode = 'selected';
+      state.mode = DEFAULT_TUNNEL_MODE;
       migrated = true;
     }
 
@@ -341,7 +344,7 @@ function applicationProcessName(application) {
 }
 
 function applicationIdentity(application) {
-  return applicationProcessName(application).toLowerCase();
+  return String(application?.path || applicationProcessName(application)).trim().toLowerCase();
 }
 
 function normalizeApplicationList(applications) {
@@ -349,7 +352,7 @@ function normalizeApplicationList(applications) {
   const known = new Set();
   for (const application of applications) {
     const processName = applicationProcessName(application);
-    const identity = processName.toLowerCase();
+    const identity = applicationIdentity(application);
     if (!identity || known.has(identity)) continue;
     known.add(identity);
     normalized.push({
@@ -360,6 +363,58 @@ function normalizeApplicationList(applications) {
     });
   }
   return normalized;
+}
+
+async function activateCoreUpdate(generation) {
+  const disconnectId = manualDisconnectId;
+  await checkCoreUpdate(generation);
+  const running = isTunnelActive();
+  await stopTunnel({ immediate: true });
+  updatedCores = await signedUpdates.activate(generation);
+  if (manualDisconnectId !== disconnectId) {
+    return 'Подписанные ядра установлены. Подключение остановлено пользователем.';
+  }
+  if (!running) {
+    if (state.killSwitch === 'always' || networkGuard?.active) await armGuard();
+    return 'Подписанные ядра установлены. Предыдущая версия сохранена для отката.';
+  }
+
+  const reconnectOperationId = tunnelOperationId + 1;
+  try { await startTunnel(); }
+  catch { /* Connection status is checked below before retaining the update. */ }
+  if (manualDisconnectId !== disconnectId || tunnelOperationId !== reconnectOperationId) {
+    return 'Подписанные ядра установлены. Подключение остановлено пользователем.';
+  }
+  if (state.status === 'connected') {
+    return 'Подписанные ядра установлены. Предыдущая версия сохранена для отката.';
+  }
+
+  await stopTunnel({ immediate: true });
+  updatedCores = await signedUpdates.rollbackCores();
+  const rollbackOperationId = tunnelOperationId + 1;
+  try { await startTunnel(); }
+  catch { /* The restored core result is reported through the connection state. */ }
+  if (tunnelOperationId !== rollbackOperationId) {
+    return 'Новые ядра не прошли проверку. Предыдущая версия восстановлена; VPN остановлен пользователем.';
+  }
+  return 'Соединение на новых ядрах не подтверждено. Восстановлена предыдущая версия.';
+}
+
+async function listRunningProcesses() {
+  if (process.platform !== 'win32') return [];
+  const { stdout } = await executeFile('tasklist.exe', ['/fo', 'csv', '/nh'], { windowsHide: true, timeout: 8000, maxBuffer: 1024 * 1024 });
+  const rows = [];
+  const seen = new Set();
+  for (const line of String(stdout).split(/\r?\n/)) {
+    const match = line.match(/^"([^"]+)"\s*,\s*"(\d+)"/);
+    if (!match) continue;
+    const processName = match[1].trim();
+    const identity = processName.toLowerCase();
+    if (!identity || seen.has(identity) || !/^[^\\/:*?"<>|]+\.exe$/i.test(processName)) continue;
+    seen.add(identity);
+    rows.push({ name: path.basename(processName, '.exe'), processName, pid: Number(match[2]) });
+  }
+  return rows.sort((a, b) => a.processName.localeCompare(b.processName));
 }
 
 function storeSubscriptions(saved) {
@@ -612,7 +667,10 @@ function readDiagnosticCoreLog(child, coreName, chunk) {
   const message = chunk.toString();
   if (/authentication failed|invalid user|invalid password/i.test(message)) child.authErrorCount = (child.authErrorCount || 0) + 1;
   // Inspect each line independently: a chunk can contain unrelated startup and network messages.
-  if (message.split(/\r?\n/).some(isLocalCoreFailure)) child.localFailure = true;
+  if (message.split(/\r?\n/).some(isLocalCoreFailure)) {
+    child.localFailure = true;
+    child.localFailureMessage = coreDiagnostic(message);
+  }
   const diagnostic = coreDiagnostic(message);
   if (!diagnostic) return;
   if (child.lastDiagnostic === diagnostic && Date.now() - child.lastDiagnosticAt < 1000) return;
@@ -730,7 +788,7 @@ async function waitForVerifiedTunnel(child, port, timeoutMs = 8000, signal, stag
   while (Date.now() < deadline) {
     if (signal?.aborted) throw connectionError('ABORT_ERR', 'Подключение отменено.');
     if (child.startError) throw child.startError;
-    if (child.localFailure) throw connectionError('TUN_FAILED', connectionErrorMessages.local);
+    if (child.localFailure) throw connectionError('TUN_FAILED', child.localFailureMessage || connectionErrorMessages.local);
     if (child.exitCode !== null) throw connectionError('ENGINE_FAILED', 'VPN-ядро завершилось до установки соединения.');
     const authBefore = (child.authErrorCount || 0) + (xrayProcess?.authErrorCount || 0);
     try {
@@ -793,7 +851,7 @@ async function waitForLocalPort(child, port, timeoutMs = 8000, processName = 'Xr
     if (!slowReported && Date.now() - startedAt >= 5000) { slowReported = true; onSlow(); }
     if (signal?.aborted) throw connectionError('ABORT_ERR', 'Подключение отменено.');
     if (child.startError) throw child.startError;
-    if (child.localFailure) throw connectionError('TUN_FAILED', connectionErrorMessages.local);
+    if (child.localFailure) throw connectionError('TUN_FAILED', child.localFailureMessage || connectionErrorMessages.local);
     if (child.exitCode !== null) throw connectionError('ENGINE_FAILED', `${processName} завершился до запуска локального прокси.`);
     try {
       await new Promise((resolve, reject) => {
@@ -1465,6 +1523,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
     await removeRuntimeConfig(xrayConfigFile);
     if (staleOperation) return;
     state.status = 'error';
+    state.warning = '';
     const reason = classifyConnectionError(error);
     state.error = ['NO_CANDIDATES', 'NO_WORKING_SERVER'].includes(error.code) ? error.message
       : reason === 'local' ? error.message : connectionErrorMessages[reason];
@@ -1744,22 +1803,7 @@ app.whenReady().then(async () => {
       if (selected.canceled) return 'Отменено.';
       const generation = await signedUpdates.stage(selected.filePaths[0]);
       if (generation.manifest.kind === 'app') return await launchSignedInstaller(generation);
-      await checkCoreUpdate(generation);
-      const running = isTunnelActive();
-      await stopTunnel({immediate:true});
-      updatedCores = await signedUpdates.activate(generation);
-      if (running) {
-        try { await startTunnel(); }
-        catch { /* Connection status is checked below before retaining the update. */ }
-        if (state.status !== 'connected') {
-          await stopTunnel({immediate:true});
-          updatedCores = await signedUpdates.rollbackCores();
-          await startTunnel();
-          return 'Соединение на новых ядрах не подтверждено. Восстановлена предыдущая версия.';
-        }
-      }
-      else if (state.killSwitch === 'always' || networkGuard?.active) await armGuard();
-      return 'Подписанные ядра установлены. Предыдущая версия сохранена для отката.';
+      return await activateCoreUpdate(generation);
     } finally { updateBusy = false; }
   });
   ipcMain.handle('update:rollback', async () => {
@@ -1824,27 +1868,73 @@ app.whenReady().then(async () => {
     if (result.canceled) return publicState();
     const shouldRestart = isTunnelActive();
     const target = state.mode === 'bypass' ? state.bypassApplications : state.selectedApplications;
-    const knownProcesses = new Set(target.map(applicationIdentity).filter(Boolean));
+    const knownApplications = new Set(target.map(applicationIdentity).filter(Boolean));
     let changed = false;
     for (const filePath of result.filePaths) {
       const processName = path.basename(filePath);
-      const identity = processName.toLowerCase();
-      const existing = target.find(item => applicationIdentity(item) === identity);
-      if (existing && existing.path !== filePath) { existing.path = filePath; existing.custom = true; changed = true; }
-      if (!knownProcesses.has(identity)) {
+      const identity = filePath.toLowerCase();
+      if (!knownApplications.has(identity)) {
         target.push({
           name: path.basename(filePath, '.exe'),
           processName,
           path: filePath,
           custom: true
         });
-        knownProcesses.add(identity);
+        knownApplications.add(identity);
         changed = true;
       }
     }
     if (!changed) return publicState();
     await saveState();
     if (shouldRestart) await startTunnel();
+    else { if (state.killSwitch === 'always' || networkGuard?.active) await armGuard(); pushState(); }
+    return publicState();
+  });
+  ipcMain.handle('apps:list-running', async () => listRunningProcesses());
+  ipcMain.handle('apps:add-process', async (_event, input) => {
+    const processName = String(input?.processName || '').trim();
+    if (!/^[^\\/:*?"<>|]+\.exe$/i.test(processName)) throw new Error('Укажите имя процесса из списка диспетчера задач.');
+    if (state.killSwitch !== 'off') throw new Error('При включённом Kill switch добавляйте приложение кнопкой «EXE-файл», чтобы указать путь к файлу.');
+    const shouldRestart = isTunnelActive();
+    const target = state.mode === 'bypass' ? state.bypassApplications : state.selectedApplications;
+    if (!target.some((item) => applicationIdentity(item) === processName.toLowerCase())) {
+      target.push({ name: path.basename(processName, '.exe'), processName, path: '', custom: true });
+      await saveState();
+      if (shouldRestart) await startTunnel();
+      else { if (state.killSwitch === 'always' || networkGuard?.active) await armGuard(); pushState(); }
+    }
+    return publicState();
+  });
+  ipcMain.handle('routing:add-direct', async (_event, value) => {
+    let entry = String(value || '').trim();
+    if (!entry) throw new Error('Введите домен, например vk.ru.');
+    // The quick exception field is user-facing and accepts a pasted website URL.
+    // The routing engine itself deliberately stores hostnames only.
+    if (/^https?:\/\//i.test(entry)) {
+      try {
+        const parsed = new URL(entry);
+        if (!parsed.hostname) throw new Error('empty host');
+        entry = parsed.hostname;
+      } catch {
+        throw new Error('Укажите сайт в формате vk.ru или https://vk.ru/.');
+      }
+    }
+    const customRouting = normalizeRouting({ ...state.customRouting, direct: [...state.customRouting.direct, entry] });
+    if (JSON.stringify(customRouting) === JSON.stringify(state.customRouting)) return publicState();
+    state.customRouting = customRouting;
+    await saveState();
+    if (isTunnelActive()) await startTunnel();
+    else { if (state.killSwitch === 'always' || networkGuard?.active) await armGuard(); pushState(); }
+    return publicState();
+  });
+  ipcMain.handle('routing:remove-direct', async (_event, value) => {
+    const entry = String(value || '').trim().toLowerCase();
+    if (!entry) return publicState();
+    const customRouting = normalizeRouting({ ...state.customRouting, direct: state.customRouting.direct.filter((item) => item !== entry) });
+    if (JSON.stringify(customRouting) === JSON.stringify(state.customRouting)) return publicState();
+    state.customRouting = customRouting;
+    await saveState();
+    if (isTunnelActive()) await startTunnel();
     else { if (state.killSwitch === 'always' || networkGuard?.active) await armGuard(); pushState(); }
     return publicState();
   });
@@ -1866,11 +1956,16 @@ app.whenReady().then(async () => {
     const shouldRestart = isTunnelActive();
     const key = applicationIdentity(application);
     if (!key) throw new Error('Не удалось определить имя процесса приложения.');
-    const exists = state.selectedApplications.some((item) => applicationIdentity(item) === key);
+    const inputHasPath = Boolean(application.path);
+    const processIdentity = applicationProcessName(application).toLowerCase();
+    const matches = item => inputHasPath
+      ? applicationIdentity(item) === key
+      : applicationProcessName(item).toLowerCase() === processIdentity;
+    const exists = state.selectedApplications.some(matches);
     if (state.killSwitch !== 'off' && !exists) throw new Error('При включённом Kill switch добавляйте приложения через кнопку «Добавить», указав EXE-файл.');
     if (state.killSwitch !== 'off' && exists && state.selectedApplications.length === 1) throw new Error('Сначала отключите Kill switch или добавьте другое приложение.');
     if (exists) {
-      state.selectedApplications = state.selectedApplications.filter((item) => applicationIdentity(item) !== key);
+      state.selectedApplications = state.selectedApplications.filter((item) => !matches(item));
     } else {
       state.selectedApplications.push({
         name: String(application.name),
@@ -1897,6 +1992,7 @@ app.whenReady().then(async () => {
     let preferenceChanged = false;
     if (killSwitch !== state.killSwitch || (killSwitch === 'off' && networkGuard?.active)) {
       if (killSwitch === 'off') await networkGuard?.clear();
+      else if (killSwitch === 'session' && !tunnelRunning) await networkGuard?.clear();
       else if (killSwitch === 'always' || tunnelRunning) {
         if (!networkGuard) throw new Error('Системная защита недоступна.');
         await networkGuard.apply({ ...state, ...update, killSwitch, customRouting: customRouting || state.customRouting }, guardCores(), tunnelRunning ? activeTunName : '-');
@@ -1951,7 +2047,8 @@ app.whenReady().then(async () => {
     await saveState();
     if (tunnelRunning && routingChanged) await startTunnel();
     else {
-      if (state.killSwitch === 'always' || (state.killSwitch !== 'off' && networkGuard?.active)) await armGuard();
+      if (!tunnelRunning && state.killSwitch === 'always') await armGuard();
+      else if (!tunnelRunning && routingChanged && state.killSwitch === 'session' && networkGuard?.active) await armGuard();
       scheduleReserveCheck(); pushState();
     }
     return publicState();
@@ -2011,7 +2108,7 @@ app.whenReady().then(async () => {
 let logFlushedOnQuit = false;
 let logFlushInProgress = false;
 app.on('before-quit', (event) => {
-  if ((fileLog || selectionInFlight || latencyRefreshInFlight) && !logFlushedOnQuit) {
+  if (!logFlushedOnQuit) {
     event.preventDefault();
     if (!logFlushInProgress) {
       logFlushInProgress = true;
@@ -2019,13 +2116,12 @@ app.on('before-quit', (event) => {
       connectionController?.abort();
       latencyController?.abort();
       log('Завершение приложения.');
-      Promise.allSettled([selectionInFlight, latencyRefreshInFlight])
-        .then(async () => {
-          await stopTunnel({ immediate: true });
-          if (state.killSwitch === 'session') await networkGuard?.clear();
-          else if (state.killSwitch === 'always') await armGuard();
-          await fileLog?.flush();
-        }).catch(() => {}).finally(() => { logFlushedOnQuit = true; app.quit(); });
+      Promise.allSettled([selectionInFlight, latencyRefreshInFlight]).then(async () => {
+        await stopTunnel({ immediate: true }).catch(() => {});
+        if (state.killSwitch === 'session') await networkGuard?.clear().catch(() => {});
+        else if (state.killSwitch === 'always') await armGuard().catch(() => {});
+        await fileLog?.flush().catch(() => {});
+      }).finally(() => { logFlushedOnQuit = true; app.quit(); });
     }
     return;
   }

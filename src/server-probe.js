@@ -147,7 +147,9 @@ async function probeServerOnce(server, executable, xrayExecutable, { signal, tim
     await Promise.all(processes.map(async entry => {
       if (entry.done) return;
       let stopTimer;
-      try { await Promise.race([entry.exited, new Promise(resolve => { stopTimer = setTimeout(resolve, 1000); })]); }
+      // Windows may take several seconds to report exit after terminating a core.
+      // Do not discard a verified server while its disposable proxy is shutting down.
+      try { await Promise.race([entry.exited, new Promise(resolve => { stopTimer = setTimeout(resolve, 5000); })]); }
       finally { clearTimeout(stopTimer); }
     }));
     signal?.removeEventListener('abort', abort);

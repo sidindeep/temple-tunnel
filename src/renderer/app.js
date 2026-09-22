@@ -12,6 +12,7 @@ const elements = {
   nav: [...document.querySelectorAll('.nav')],
   pages: {
     home: document.getElementById('homePage'),
+    connection: document.getElementById('connectionPage'),
     subscription: document.getElementById('subscriptionPage'),
     routing: document.getElementById('routingPage'),
     logs: document.getElementById('logsPage')
@@ -25,14 +26,12 @@ const elements = {
   emptyApps: document.getElementById('emptyApps'),
   emptyAppsTitle: document.getElementById('emptyAppsTitle'),
   emptyAppsText: document.getElementById('emptyAppsText'),
-  serverList: document.getElementById('serverList'),
-  emptyServers: document.getElementById('emptyServers'),
-  refreshButton: document.getElementById('refreshButton'),
-  pingStatus: document.getElementById('pingStatus'),
+  serverList: document.getElementById('homeServerList'),
+  refreshButton: document.getElementById('homePingButton'),
   serverFlag: document.getElementById('serverFlag'),
   selectedServerName: document.getElementById('selectedServerName'),
   selectedServerDetails: document.getElementById('selectedServerDetails'),
-  powerButton: document.getElementById('powerButton'),
+  powerButton: document.getElementById('homePowerButton'),
   warningBanner: document.getElementById('warningBanner'),
   warningText: document.getElementById('warningText'),
   cancelReconnectButton: document.getElementById('cancelReconnectButton'),
@@ -101,6 +100,8 @@ function textNode(tag, className, value) {
 }
 
 function showPage(name) {
+  const navigation = elements.nav.find(button => button.dataset.page === name);
+  document.getElementById('pageTitle').textContent = navigation?.textContent.replace(navigation.querySelector('span').textContent, '').trim() || 'Главная';
   elements.nav.forEach((button) => button.classList.toggle('active', button.dataset.page === name));
   Object.entries(elements.pages).forEach(([key, page]) => page.classList.toggle('active', key === name));
   if (name === 'logs' && currentState) renderLogs(currentState.logs, true);
@@ -164,9 +165,8 @@ function latencyView(server) {
   return { label: 'Не удалось измерить', className: 'server-latency unavailable' };
 }
 
-function renderServers(servers, selectedId) {
-  elements.serverList.replaceChildren();
-  elements.emptyServers.hidden = servers.length > 0;
+function renderServers(servers, selectedId, list = elements.serverList) {
+  list.replaceChildren();
   for (const server of servers) {
     const row = textNode('button', `server-row${server.id === selectedId ? ' selected' : ''}${server.supported ? '' : ' unsupported'}`, '');
     row.type = 'button';
@@ -192,8 +192,41 @@ function renderServers(servers, selectedId) {
       row.setAttribute('aria-disabled', 'true');
       row.disabled = true;
     }
-    elements.serverList.append(row);
+    list.append(row);
   }
+}
+
+function renderRunningProcesses(processes) {
+  const list = document.getElementById('runningProcessList');
+  list.replaceChildren();
+  const query = document.getElementById('processSearch').value.trim().toLowerCase();
+  const visible = processes.filter((item) => !query || item.processName.toLowerCase().includes(query));
+  if (!visible.length) { list.append(textNode('span', 'helper', 'Запущенные процессы не найдены.')); return; }
+  for (const process of visible) {
+    const row = textNode('button', 'running-process-row', '');
+    row.type = 'button';
+    row.append(textNode('strong', '', process.processName));
+    row.append(textNode('span', '', `PID ${process.pid}`));
+    row.addEventListener('click', () => run(async () => {
+      const result = await window.temple.addProcess(process);
+      document.getElementById('runningProcesses').hidden = true;
+      return result;
+    }));
+    list.append(row);
+  }
+}
+
+let runningProcesses = [];
+
+function renderHomeServers() {
+  if (!currentState) return;
+  const query = document.getElementById('serverSearch').value.trim().toLocaleLowerCase();
+  const servers = currentState.servers.filter(server => server.name.toLocaleLowerCase().includes(query));
+  renderServers(servers, currentState.selectedServerId, document.getElementById('homeServerList'));
+  document.getElementById('homeServerCount').textContent = `${servers.length} / ${currentState.servers.length}`;
+  const empty = document.getElementById('homeEmptyServers');
+  empty.hidden = servers.length > 0;
+  empty.textContent = currentState.servers.length ? 'Серверы не найдены. Измените запрос.' : 'Добавьте подписку — здесь появятся серверы.';
 }
 
 function renderSubscriptions(subscriptions, activeId) {
@@ -317,12 +350,16 @@ function renderStatus(state) {
     || (missingSelectedApps ? 'Сначала выберите приложение' : !selectedServer ? 'Сначала выберите сервер' : 'Подключить VPN');
   elements.statusBadge.className = `status-badge ${state.status === 'connected' ? 'online' : state.status}`;
   elements.statusBadge.querySelector('span').textContent = labels[state.status] || state.status;
-  elements.powerButton.classList.toggle('on', state.status === 'connected');
-  elements.powerButton.classList.toggle('busy', ['connecting','reconnecting','disconnecting'].includes(state.status));
-  elements.powerButton.disabled = powerStopInFlight || cannotConnect;
-  elements.powerButton.title = powerLabel;
-  elements.powerButton.setAttribute('aria-label', powerLabel);
-  elements.powerButton.setAttribute('aria-pressed', String(state.status === 'connected'));
+  for (const button of [elements.powerButton]) {
+    button.classList.toggle('on', state.status === 'connected');
+    button.classList.toggle('busy', ['connecting','reconnecting','disconnecting'].includes(state.status));
+    button.disabled = powerStopInFlight || cannotConnect;
+    button.title = powerLabel;
+    button.setAttribute('aria-label', powerLabel);
+    button.setAttribute('aria-pressed', String(state.status === 'connected'));
+  }
+  document.getElementById('homeConnectionStatus').textContent = labels[state.status] || state.status;
+  document.getElementById('homeConnectionHint').textContent = powerLabel;
 }
 
 function render(state) {
@@ -340,25 +377,27 @@ function render(state) {
   document.getElementById('connectionStrategy').value = state.connectionStrategy || 'auto';
   document.getElementById('connectionStrategy').disabled = ['connecting', 'reconnecting', 'disconnecting'].includes(state.status);
   const fullMode = state.mode === 'full';
-  elements.applicationsPanel.hidden = fullMode;
-  elements.contentGrid.classList.toggle('full-mode', fullMode);
-  elements.applicationsTitle.textContent = state.mode === 'bypass' ? 'Исключения из VPN' : 'Раздельное туннелирование';
-  elements.applicationsHelper.textContent = state.mode === 'bypass'
+  document.getElementById('addAppButton').hidden = fullMode;
+  document.getElementById('listProcessesButton').hidden = fullMode;
+  elements.appList.hidden = fullMode;
+  elements.applicationsTitle.textContent = fullMode ? 'Полная защита' : state.mode === 'bypass' ? 'Исключения из VPN' : 'Раздельное туннелирование';
+  elements.applicationsHelper.textContent = fullMode ? 'В этом режиме список приложений не используется.' : state.mode === 'bypass'
     ? 'Добавьте программы, которые должны работать напрямую, без VPN.'
     : 'Выберите программы, которые будут работать через VPN.';
-  elements.emptyAppsTitle.textContent = state.mode === 'bypass' ? 'Исключений нет' : 'Приложения не добавлены';
-  elements.emptyAppsText.textContent = state.mode === 'bypass'
+  elements.emptyAppsTitle.textContent = fullMode ? 'Защита для всех приложений' : state.mode === 'bypass' ? 'Исключений нет' : 'Приложения не добавлены';
+  elements.emptyAppsText.textContent = fullMode ? 'Для настройки списка выберите один из раздельных режимов ниже.' : state.mode === 'bypass'
     ? 'Нажмите «Добавить», чтобы исключить приложение из VPN.'
     : 'Нажмите «Добавить» и выберите EXE-файл.';
   const applicationSignature = JSON.stringify([state.applications, state.suggestedApplications || [], state.mode]);
   if (applicationSignature !== renderSignatures.applications) {
     renderSignatures.applications = applicationSignature;
     renderApplications(state.applications, state.suggestedApplications || [], state.mode);
+    if (fullMode) elements.emptyApps.hidden = false;
   }
   const serverSignature = JSON.stringify([state.servers, state.selectedServerId]);
   if (serverSignature !== renderSignatures.servers) {
     renderSignatures.servers = serverSignature;
-    renderServers(state.servers, state.selectedServerId);
+    renderHomeServers();
   }
   const subscriptionSignature = JSON.stringify([state.subscriptions || [], state.activeSubscriptionId]);
   if (subscriptionSignature !== renderSignatures.subscriptions) {
@@ -367,6 +406,7 @@ function render(state) {
   }
   renderStatus(state);
   document.querySelectorAll('[data-mode]').forEach((button) => button.classList.toggle('active', button.dataset.mode === state.mode));
+  document.getElementById('homeMode').value = state.mode;
   const modeDescriptions = {
     full: state.russianSitesViaVpn !== false ? 'Весь публичный трафик и DNS идут через VPN.' : 'Российские домены и IP из встроенных списков — напрямую. Остальной публичный трафик — через VPN.',
     selected: 'Через VPN идут выбранные приложения; российские сайты и остальные программы — напрямую.',
@@ -378,6 +418,22 @@ function render(state) {
   document.getElementById('russianSitesControl').hidden = state.mode !== 'full';
   document.getElementById('russianSitesViaVpn').checked = state.russianSitesViaVpn !== false;
   document.getElementById('russianSitesViaVpn').disabled = ['connecting', 'disconnecting', 'reconnecting'].includes(state.status);
+  const directRoutes = state.customRouting?.direct || [];
+  document.getElementById('siteExceptionStatus').textContent = directRoutes.length
+    ? `Исключения: ${directRoutes.join(', ')}` : 'Домен и его поддомены будут открываться напрямую.';
+  const siteList = document.getElementById('siteExceptionList');
+  siteList.replaceChildren();
+  for (const domain of directRoutes) {
+    const row = textNode('div', 'site-exception-row', '');
+    row.append(textNode('span', '', domain));
+    const remove = textNode('button', 'remove-button', '×');
+    remove.type = 'button';
+    remove.title = `Удалить ${domain}`;
+    remove.setAttribute('aria-label', `Удалить ${domain}`);
+    remove.addEventListener('click', () => run(() => window.temple.removeDirectRoute(domain)));
+    row.append(remove);
+    siteList.append(row);
+  }
 
   const selected = state.servers.find((server) => server.id === state.selectedServerId);
   elements.serverFlag.textContent = selected ? (selected.security === 'reality' ? 'R' : 'V') : '◌';
@@ -386,7 +442,10 @@ function render(state) {
     ? `${selected.transport.toUpperCase()} · ${selected.security.toUpperCase()}`
     : 'Добавьте VLESS-подписку';
   const activeSubscription = (state.subscriptions || []).find((item) => item.id === state.activeSubscriptionId);
-  document.getElementById('activeSubscriptionName').textContent = activeSubscription?.name || 'Подписка не выбрана';
+  document.getElementById('homeSubscriptionName').textContent = activeSubscription?.name || 'Подписка не выбрана';
+  document.getElementById('homeServerFlag').textContent = elements.serverFlag.textContent;
+  document.getElementById('homeServerName').textContent = elements.selectedServerName.textContent;
+  document.getElementById('homeServerDetails').textContent = elements.selectedServerDetails.textContent;
   elements.subscriptionStatus.textContent = state.subscriptionConfigured
     ? `Активна «${activeSubscription?.name || 'Подписка'}». Загружено серверов: ${state.servers.length}.`
     : 'Подписки ещё не добавлены.';
@@ -399,8 +458,7 @@ function render(state) {
   elements.refreshButton.disabled = !state.servers.length
     || pingRefreshing
     || ['connecting', 'disconnecting', 'reconnecting'].includes(state.status);
-  elements.refreshButton.classList.toggle('spinning', pingRefreshing);
-  elements.pingStatus.textContent = pingRefreshing ? 'проверка…' : '';
+  document.getElementById('homePingButton').textContent = pingRefreshing ? 'Проверяем пинг…' : 'Тест пинга';
   if (elements.pages.logs.classList.contains('active')) renderLogs(state.logs);
   updateSubscriptionControls();
 }
@@ -434,6 +492,10 @@ async function runSubscriptionAction(action, progressText, afterSuccess) {
 }
 
 elements.nav.forEach((button) => button.addEventListener('click', () => showPage(button.dataset.page)));
+document.getElementById('serverSearch').addEventListener('input', renderHomeServers);
+document.getElementById('homeManageButton').addEventListener('click', () => showPage('connection'));
+document.getElementById('homeSubscriptionsButton').addEventListener('click', () => showPage('subscription'));
+document.getElementById('homeMode').addEventListener('change', event => run(() => window.temple.updateSettings({ mode: event.target.value })));
 document.addEventListener('keydown', (event) => {
   if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 's') {
     event.preventDefault();
@@ -442,6 +504,23 @@ document.addEventListener('keydown', (event) => {
   }
 });
 document.getElementById('addAppButton').addEventListener('click', () => run(() => window.temple.addApplications()));
+document.getElementById('listProcessesButton').addEventListener('click', async () => {
+  const panel = document.getElementById('runningProcesses');
+  panel.hidden = false;
+  const list = document.getElementById('runningProcessList');
+  list.replaceChildren(textNode('span', 'helper', 'Загружаем список…'));
+  try { runningProcesses = await window.temple.listRunningProcesses(); renderRunningProcesses(runningProcesses); }
+  catch (error) { list.replaceChildren(textNode('span', 'helper', error.message || 'Не удалось получить список процессов.')); }
+});
+document.getElementById('closeProcessesButton').addEventListener('click', () => { document.getElementById('runningProcesses').hidden = true; });
+document.getElementById('processSearch').addEventListener('input', () => renderRunningProcesses(runningProcesses));
+document.getElementById('siteExceptionForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = document.getElementById('siteExceptionInput');
+  if (!input.value.trim()) return;
+  await run(() => window.temple.addDirectRoute(input.value));
+  input.value = '';
+});
 elements.refreshButton.addEventListener('click', async () => {
   if (pingRequestInFlight) return;
   pingRequestInFlight = true;
