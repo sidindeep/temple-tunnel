@@ -10,7 +10,7 @@ const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { setTimeout: delay } = require('node:timers/promises');
 
-async function harness({ strategy = 'auto', probeDelay = 5, verifyError, verifyDelay = 0, switchError, switchDelay = 0, allOffline = false, xhttp = false, reserveDelay = 0, hysteria = false, realityXray = false } = {}) {
+async function harness({ strategy = 'auto', probeDelay = 5, verifyError, verifyDelay = 0, switchError, switchDelay = 0, allOffline = false, xhttp = false, reserveDelay = 0, hysteria = false, realityXray = false, ipv6Disabled = false } = {}) {
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'temple-lifecycle-'));
   const sourcePath = path.join(__dirname, '../src/main.js');
   const realRequire = createRequire(sourcePath);
@@ -22,6 +22,7 @@ async function harness({ strategy = 'auto', probeDelay = 5, verifyError, verifyD
   if(hysteria)for(const profile of profiles)Object.assign(profile,{protocol:'hysteria2',transport:'hysteria2',password:'test',security:'tls',serverName:'example.com'});
   const context = vm.createContext({
     require(name) {
+      if(name==='./windows-ipv6')return {detectWindowsIPv6:async()=>({disabled:ipv6Disabled,status:'read',components:ipv6Disabled?4294967295:0})};
       if(name==='./connection-notices')return {createConnectionNotices:()=>realRequire(name).createConnectionNotices((title,body)=>seen.notices.push({title,body}))};
       if(name==='electron')return {net:{isOnline:()=>seen.online},dialog:{showMessageBox:async()=>({response:0})},app:{disableHardwareAcceleration(){},requestSingleInstanceLock:()=>true,
         on(name,handler){handlers[`app:${name}`]=handler;},quit(){seen.quits=(seen.quits||0)+1;},whenReady:()=>({then(){}})},
@@ -36,7 +37,7 @@ async function harness({ strategy = 'auto', probeDelay = 5, verifyError, verifyD
       if(name==='node:child_process')return {execFile:realRequire(name).execFile,spawn(_exe,args) {
         seen.tunStarts++;
         const config=JSON.parse(fs.readFileSync(args.includes('-c') ? args[args.indexOf('-c')+1] : args.at(-1)));
-        const tun=config.inbounds?.find(i=>i.type==='tun');if(tun)seen.tunNames.push(tun.interface_name);
+        const tun=config.inbounds?.find(i=>i.type==='tun');if(tun){seen.tunNames.push(tun.interface_name);seen.tunAddresses=tun.address;}
         const child=new EventEmitter();child.exitCode=null;child.stdout=new PassThrough();child.stderr=new PassThrough();
         child.kill=()=>{queueMicrotask(()=>{child.exitCode=0;child.emit('exit',0);});return true;};
         child.stdin=new PassThrough();child.stdin.on('finish',()=>child.kill());
@@ -78,6 +79,15 @@ async function harness({ strategy = 'auto', probeDelay = 5, verifyError, verifyD
   vm.runInContext(source.slice(source.indexOf("  ipcMain.handle('settings:update'"), source.indexOf("  ipcMain.handle('tunnel:toggle'")),context);
   return {context,seen,handlers,async dispose(){await context.stop({immediate:true});await fsp.rm(directory,{recursive:true,force:true});}};
 }
+
+test('Windows with DisabledComponents FFFFFFFF connects using an IPv4 TUN', async t => {
+ const h=await harness({ipv6Disabled:true});t.after(()=>h.dispose());
+ await h.context.start();
+ assert.equal(h.context.snapshot().status,'connected');
+ assert.equal(h.seen.tunAddresses.length,1);
+ assert.ok(h.seen.tunAddresses.every(address=>!address.includes(':')));
+ assert.ok(h.seen.logs.some(line=>line.includes('0xffffffff')));
+});
 
 function fakeGuard(h, mode = 'session') {
   vm.runInContext(`state.killSwitch='${mode}';seen.guardEvents=[];seen.guardActive=false;

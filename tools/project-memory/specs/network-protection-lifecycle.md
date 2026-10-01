@@ -29,6 +29,20 @@ Last verified: 2026-09-22.
 
 ## Verification
 
+0.14.4: перед созданием Windows TUN `src/windows-ipv6.js` читает DWORD
+`HKLM/SYSTEM/CurrentControlSet/Services/Tcpip6/Parameters/DisabledComponents`
+без изменения системы. Значение переводится из signed DWORD в UInt32; бит
+`0x10` отключает назначение IPv6 TUN, DNS использует `ipv4_only`. Биты переходных
+туннелей (`0x01`) и предпочтения IPv4 (`0x20`) отдельно не меняют адреса TUN.
+Отсутствующее значение означает 0; ошибка/тайм-аут/неверный тип сохраняет IPv6.
+После асинхронного чтения проверяется поколение подключения. `strict_route`
+всегда сохраняется: sing-tun v0.8.14, используемый sing-box 1.13.20, при отсутствии
+IPv6-адреса устанавливает WFP `block ipv6` (кроме разрешённого процесса ядра).
+Источник: https://github.com/SagerNet/sing-tun/blob/v0.8.14/tun_windows.go.
+Покрытие: `test/windows-ipv6.test.js`, `test/singbox.test.js`,
+`test/connection-lifecycle.test.js`. Реальные пакеты и запуск на ПК с отключённым
+IPv6 требуют отдельной проверки; реестр рабочей машины для теста не изменяется.
+
 - `test/connection-lifecycle.test.js` covers policy-only changes, protection
   transitions, shutdown without a file logger, update cancellation, delayed
   saves, and deletion of the final subscription.

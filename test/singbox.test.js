@@ -44,6 +44,20 @@ test('bypass mode sends listed processes direct and defaults to proxy', () => {
   assert.equal(config.dns.rules.find((item) => item.process_path).server, 'dns-direct');
 });
 
+test('system-disabled IPv6 omits IPv6 addressing while retaining strict routing and IPv4 DNS', () => {
+  for (const ipv6Policy of ['block', 'tunnel']) {
+    const config = buildConfig({ server, mode: 'full', applications: [], systemIPv6Disabled: true, ipv6Policy });
+    assert.deepEqual(config.inbounds[0].address, ['172.31.254.1/30']);
+    assert.equal(config.inbounds[0].strict_route, true);
+    assert.equal(config.inbounds[0].auto_route, true);
+    assert.equal(config.dns.strategy, 'ipv4_only');
+    assert.equal(config.route.final, 'proxy');
+  }
+  const normal = buildConfig({ server, mode: 'full', applications: [], ipv6Policy: 'block' });
+  assert.equal(normal.inbounds[0].address.length, 2);
+  assert.ok(normal.route.rules.some(rule => rule.inbound === 'tun-in' && rule.ip_version === 6 && rule.action === 'reject'));
+});
+
 test('full mode sends all public traffic and DNS through proxy', () => {
   const config = buildConfig({
     server,
@@ -101,13 +115,14 @@ test('all supported sing-box transport configs pass bundled validation', { skip:
       { ...server, transport: 'httpupgrade', path: '/upgrade', hostHeader: 'cdn.example.org', flow: '' },
       { ...server, transport: 'http', path: '/http', hostHeader: 'cdn.example.org', flow: '' }
     ];
-    for (const [index, variant] of variants.entries()) {
+    for (const [index, variant] of [...variants, ...variants].entries()) {
       const configPath = path.join(directory, `config-${index}.json`);
       fs.writeFileSync(configPath, JSON.stringify(buildConfig({
         server: variant,
         mode: 'selected',
         applications: [{ path: 'C:\\Apps\\Telegram.exe' }],
         healthPort: 23456 + index,
+        systemIPv6Disabled: index >= variants.length,
         ruleSetPaths
       })));
       const result = spawnSync(executable, ['check', '-c', configPath], { encoding: 'utf8' });

@@ -50,17 +50,25 @@ language preferences.
   migrations, version/changelog, and local instruction-kit metadata in sync.
 - Treat dirty worktrees as normal.
 - Do not revert user changes unless the user explicitly asks.
-- Keep changes scoped to the current task.
+- Keep changes scoped to the current task or the standalone command's scope.
 - A Git-finish command authorizes Git finalization, compact read-only inspection,
-  and proportionate verification of an already established task scope. It does
+  and proportionate verification of the resolved commit scope. It does
   not authorize new product implementation, test-expectation rewrites, runtime
   or service repair, dependency changes, broad cleanup, or other tracked-file
   edits merely to make the worktree or verification clean.
-- Derive finish scope only from the active task in the current conversation or
-  an explicit user-selected path/change set. Never infer that all dirty files
-  form one task because they appear related, were modified recently, or can be
-  made to pass together. If no unambiguous active task scope exists, stop before
-  staging or writes and ask the user to identify what should be committed.
+- Resolve commit scope in order: explicit user-selected paths/changes, the active
+  conversation task, then the standalone command's repository scope. With no
+  selected paths or active task, `gi commit`, `gi push`, and `gi commit push`
+  (including Russian aliases) select all current eligible tracked and untracked
+  changes in the verified repository. Apply this default in a new chat without
+  asking whether to include all changes solely because history is absent or the
+  dirty file count is large. Inspect the selected changes and briefly report
+  scope and exclusions before staging. Exclude secrets, prohibited content,
+  generated noise, and work explicitly reserved separately.
+  Never infer that all dirty files belong to an active task from similarity or
+  timestamps. Ask only when concrete
+  conflicting scope instructions or inseparable excluded changes prevent safe
+  selection. `gi only push` does not select working-tree changes.
 - Do not commit secrets, credentials, local databases, logs, or generated
   caches.
 - Never add, stage, commit, or push content payloads such as LLM or other model
@@ -90,7 +98,8 @@ Before any `gi коммит`, `gi пуш`, `gi коммит пуш`, or `gi то
 - for a push, identify the upstream before staging or committing. If it is
   absent, ask which remote branch to use and set tracking on the first push;
   never infer the destination from another remote branch containing HEAD;
-- keep user/unrelated changes out of the commit;
+- keep changes outside the resolved scope out of the commit; pre-existing user
+  changes are eligible under the standalone repository scope unless excluded;
 - stop and explain the blocker if scope is ambiguous, conflicts are present,
   secrets may be included, the project is not a git repository, no remote is
   configured for a push, or push fails.

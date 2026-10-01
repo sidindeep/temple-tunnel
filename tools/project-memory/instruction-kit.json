@@ -1,5 +1,5 @@
 {
-  "instruction_kit_version": "2026.09.29.1",
+  "instruction_kit_version": "2026.10.01.1",
   "source": "https://github.com/Dimosfil/general-instructions.git",
   "installed_at": "2026-09-16T16:46:49.6032224+03:00",
   "config_service": {
@@ -97,9 +97,9 @@
   ],
   "migration_state": {
     "schema_version": 2,
-    "applied_through": "2026.09.29.1__clarify_gi_push_project_rules_and_upstream",
+    "applied_through": "2026.10.01.1__define_standalone_git_finish_scope",
     "additional_applied_migrations": [],
     "skipped_migrations": []
   },
-  "last_update_check_at": "2026-10-01T07:37:11+03:00"
+  "last_update_check_at": "2026-10-01T12:44:09+03:00"
 }

@@ -11,6 +11,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { downloadSubscription, isSupportedTransport } = require('./subscription');
 const { buildConfig } = require('./singbox');
+const { detectWindowsIPv6 } = require('./windows-ipv6');
 const { buildXrayConfig, buildXrayGroup } = require('./xray');
 const { measureEndpointLatency, measureTunnelLatency, checkTunnelConnectivity, checkTunnelReadiness } = require('./latency');
 const { resolveServer, probeServer } = require('./server-probe');
@@ -712,7 +713,9 @@ function readDiagnosticCoreLog(child, coreName, chunk, streamName) {
   if (child.lastDiagnostic === diagnostic && Date.now() - child.lastDiagnosticAt < 1000) return;
   child.lastDiagnostic = diagnostic;
   child.lastDiagnosticAt = Date.now();
-  log(`[${coreName}] ${diagnostic}`);
+  const severity = /\bfatal\b/i.test(message) ? 'FATAL' : /\berror\b/i.test(message) ? 'ERROR'
+    : /\bwarn(?:ing)?\b/i.test(message) ? 'WARN' : 'INFO';
+  log(`[${coreName}, ${['stdout', 'stderr'].includes(streamName) ? streamName : 'output'}, ${severity}] ${diagnostic}`);
 }
 
 function corePath() {
@@ -1263,6 +1266,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
   const startedAt = Date.now();
   const stage = (message) => log(`[Подключение ${operationId}, +${Date.now() - startedAt} мс] ${message}`);
   stage(automatic ? 'Автоматическое переключение сервера.' : retry ? 'Повторное подключение после смены сети.' : 'Подключение запрошено.');
+  stage(`Среда: Temple Tunnel ${app.getVersion?.() || 'development'}; Windows/ОС ${os.release()}; архитектура ${process.arch}; упакованная сборка: ${app.isPackaged ? 'да' : 'нет'}.`);
   let startedCore;
   let startedXray;
   let coreConfigFile;
@@ -1397,6 +1401,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
         stdio: ['ignore', 'pipe', 'pipe']
       });
       startedXray = xrayChild;
+      stage(`Запуск Xray: PID ${Number.isInteger(xrayChild.pid) ? xrayChild.pid : 'не получен'}.`);
       xrayProcess = xrayChild;
       attachCoreLogReader(xrayChild.stdout, line => readDiagnosticCoreLog(xrayChild, 'Xray', line, 'stdout'));
       attachCoreLogReader(xrayChild.stderr, line => readDiagnosticCoreLog(xrayChild, 'Xray', line, 'stderr'));
@@ -1410,6 +1415,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
       });
       xrayChild.on('exit', (code) => {
         if (xrayProcess !== xrayChild) return;
+        stage(`Xray завершился; код: ${Number.isInteger(code) ? code : 'не указан'}; последний признак: ${xrayChild.startupLastDiagnostic || 'распознанных сообщений нет'}.`);
         xrayProcess = null;
         removeRuntimeConfig(xrayConfigFile);
         if (state.status === 'connected' && activePool && !activePool.bridgeIds.has(activePool.activeId)) {
@@ -1441,6 +1447,11 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
     // Wintun may still be deleting the previous adapter after process exit.
     // Reusing its name can race Windows PnP and fail with already-exists/not-found.
     const tunName = `temple-tun-${crypto.randomBytes(6).toString('hex')}`;
+    const systemIPv6 = await detectWindowsIPv6();
+    assertTunnelOperation(operationId, automatic);
+    stage(systemIPv6.status === 'read'
+      ? `Windows DisabledComponents: 0x${systemIPv6.components.toString(16)}; IPv6 TUN: ${systemIPv6.disabled ? 'отключён системной настройкой, используется IPv4 и strict_route' : 'включён'}.`
+      : 'Системная настройка IPv6 не определена; сохраняем перехват IPv4 и IPv6.');
     const config = buildConfig({
       server: resolvedServer,
       customRouting: state.customRouting,
@@ -1454,8 +1465,11 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
       bridgePort,
       tunAddress,
       tunName,
+      systemIPv6Disabled: systemIPv6.disabled,
       ruleSetPaths
     });
+    const tun = config.inbounds.find(item => item.type === 'tun');
+    stage(`TUN: IPv4 ${tun.address.some(address => !address.includes(':')) ? 'включён' : 'выключен'}; IPv6 ${tun.address.some(address => address.includes(':')) ? 'включён' : 'выключен'}; стек ${tun.stack}; auto_route ${tun.auto_route}; strict_route ${tun.strict_route}; политика IPv6 ${state.ipv6Policy}; DNS ${state.dnsPolicy}; Kill switch ${state.killSwitch}.`);
     const singleConfig = JSON.stringify(config);
     const probePorts = new Map();
     for (const candidate of poolCandidates) {
@@ -1489,6 +1503,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
       stdio: [gracefulHost ? 'pipe' : 'ignore', 'pipe', 'pipe']
     });
     child.gracefulHost = gracefulHost;
+    stage(`Запуск sing-box: PID ${Number.isInteger(child.pid) ? child.pid : 'не получен'}; через core-host: ${gracefulHost ? 'да' : 'нет'}; обновлённое ядро: ${updatedCores ? 'да' : 'нет'}.`);
     child.stdin?.on('error', () => {});
     startedCore = child;
     coreProcess = child;
@@ -1496,6 +1511,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
     attachCoreLogReader(child.stderr, line => readDiagnosticCoreLog(child, 'sing-box', line, 'stderr'));
     child.on('error', (error) => {
       if (coreProcess !== child) return;
+      stage(`ОС отклонила запуск sing-box; код: ${['ENOENT', 'EACCES', 'EPERM', 'ENOEXEC', 'UNKNOWN'].includes(error.code) ? error.code : 'не распознан'}.`);
       child.startError = error;
       if (state.status === 'connecting') return;
       state.status = 'error';
@@ -1504,6 +1520,8 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
     });
     child.on('exit', (code) => {
       if (coreProcess !== child) return;
+      const counts = child.startupLineCounts || { stdout: 0, stderr: 0 };
+      stage(`sing-box завершился; код: ${Number.isInteger(code) ? code : 'не указан'}; stdout ${counts.stdout}, stderr ${counts.stderr}; последний признак: ${child.startupLastDiagnostic || 'распознанных сообщений нет'}.`);
       coreProcess = null;
       activeHealthPort = 0;
       removeRuntimeConfig(coreConfigFile);

@@ -117,7 +117,33 @@ function coreDiagnostic(message) {
   if (/create adapter|open existing adapter/.test(text) && /already exists|not found/.test(text)) return 'Windows ещё освобождает предыдущий VPN-адаптер: конфликт создания Wintun.';
   if (/open interface.*too much time/.test(text)) return 'Windows задерживает открытие VPN-адаптера.';
   if (/authentication failed|invalid user|invalid password/.test(text)) return 'Сервер отклонил авторизацию.';
-  if (isLocalCoreFailure(text)) return 'Ошибка создания или запуска локального VPN-интерфейса.';
+  if (isLocalCoreFailure(text)) {
+    const phase = [
+      [/set ipv6 address/, 'назначение IPv6'], [/set ipv4 address/, 'назначение IPv4'],
+      [/set ipv6 dns/, 'настройка DNS IPv6'], [/set ipv4 dns/, 'настройка DNS IPv4'],
+      [/set ipv6 options/, 'параметры IPv6'], [/set ipv4 options/, 'параметры IPv4'],
+      [/fwpm|wfp|filter/, 'правила Windows Filtering Platform'],
+      [/load.*(?:dll|library)|loading dll/, 'загрузка драйвера Wintun'],
+      [/create adapter|create tun/, 'создание адаптера Wintun'],
+      [/open existing adapter|open tun/, 'открытие адаптера Wintun'],
+      [/startsession|start session/, 'запуск сессии Wintun']
+    ].find(([pattern]) => pattern.test(text))?.[1] || 'запуск TUN';
+    const cause = [
+      [/access is denied|access denied|permission denied|not permitted/, 'доступ запрещён Windows'],
+      [/privilege.*not held|requires elevation/, 'недостаточно системных привилегий'],
+      [/digital signature|signature.*verif|invalid image hash/, 'Windows отклонила подпись драйвера'],
+      [/file specified|module.*not.*found|unable to load library/, 'файл или модуль драйвера недоступен'],
+      [/service.*(?:disabled|not.*started)|rpc server.*unavailable/, 'системная служба недоступна'],
+      [/not supported|not implemented/, 'операция не поддерживается системой'],
+      [/invalid parameter|parameter is incorrect/, 'Windows отклонила параметр интерфейса'],
+      [/element not found|device.*not.*found|no such device/, 'интерфейс не найден Windows'],
+      [/already exists/, 'интерфейс уже существует'],
+      [/timeout|timed out/, 'тайм-аут системной операции']
+    ].find(([pattern]) => pattern.test(text))?.[1] || 'причина не распознана';
+    // Only explicitly labelled system error numbers may leave the raw line.
+    const code = text.match(/\b(?:win32(?: error)?|windows error|os error|errno|error code|hresult)\s*[:=]?\s*(0x[0-9a-f]{1,8}|\d{1,5})\b/);
+    return `Ошибка создания или запуска локального VPN-интерфейса. Этап: ${phase}; причина: ${cause}${code ? `; системный код: ${code[1]}` : ''}.`;
+  }
   if (/operation not permitted|access is denied/.test(text)) return 'Сетевая операция отклонена; это не подтверждает ошибку запуска VPN-интерфейса.';
   if (/timeout|timed out|deadline exceeded/.test(text)) return 'Истёк тайм-аут сетевого запроса.';
   if (/connection refused|actively refused/.test(text)) return 'Соединение отклонено.';
@@ -135,6 +161,7 @@ function coreDiagnostic(message) {
       : /\boutbound\b/.test(text) ? 'исходящее соединение' : /\binbound\b/.test(text) ? 'входящее соединение' : 'не определён';
     return `${/\bfatal\b/.test(text) ? 'Критическая ошибка' : 'Неклассифицированная ошибка'}; компонент: ${area}. Причина пока не распознана диагностикой.`;
   }
+  if (/wintun/.test(text) && /installing|creating|initialized|loaded/.test(text)) return 'Подготовка драйвера или адаптера Wintun.';
   if (/started|listening/.test(text)) return 'Ядро запущено / порт открыт.';
   return '';
 }

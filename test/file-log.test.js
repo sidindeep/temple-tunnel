@@ -72,3 +72,18 @@ test('raw core data is reduced to fixed diagnostic categories', () => {
  assert.equal(coreDiagnostic('configuration password=secret'), '');
  assert.doesNotMatch(sanitizeLog('password="secret" vless://private email@example.org'), /secret|private|email@/);
 });
+
+test('TUN failures retain system phase and cause without profile data', () => {
+ const cases = [
+  ['FATAL start service: configure tun: set ipv6 address: The parameter is incorrect (os error 87)', /назначение IPv6.*параметр.*системный код: 87/],
+  ['FATAL start service: configure tun: create adapter: Access is denied (Win32 error: 5)', /создание адаптера Wintun.*доступ запрещён.*системный код: 5/],
+  ['FATAL start service: configure tun: FwpmEngineOpen0: RPC server is unavailable', /Windows Filtering Platform.*служба недоступна/],
+  ['FATAL start service: initialize wintun: error loading DLL: invalid image hash', /загрузка драйвера Wintun.*подпись драйвера/],
+  ['FATAL start service: configure tun: unknown failure', /запуск TUN.*причина не распознана/]
+ ];
+ for (const [input, expected] of cases) {
+  const diagnostic = coreDiagnostic(input + ' host=private.example 198.51.100.9 uuid=550e8400-e29b-41d4-a716-446655440000 password=secret C:\\Users\\Private');
+  assert.match(diagnostic, expected);
+  assert.doesNotMatch(diagnostic, /private|198\.51|550e8400|secret|Users/i);
+ }
+});

@@ -66,7 +66,7 @@ script path.
 | `gi test`, `ги тест` | Run the documented full verification flow. |
 | `gi git summary`, `gi гит-обзор` | Summarize the latest commit without a full diff. |
 | `gi commit`, `gi коммит` | Commit scoped changes. |
-| `gi push`, `gi пуш`, `ги пуш`, `gi commit push` | Commit and push scoped changes. |
+| `gi push`, `gi пуш`, `ги пуш`, `gi commit push` | Commit and push selected/task changes; without a task, all eligible current repository changes. |
 | `gi only push`, `gi только пуш` | Push existing commits without creating one. |
 | `gi pull`, `gi пул` | Fetch and pull the current branch. |
 | `gi update`, `gi обновить`, `gi обновись` | Apply accepted instruction-kit migrations. |

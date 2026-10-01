@@ -104,16 +104,23 @@
   Do not reinterpret `gi пуш` as a raw `git push`, a retry of a previous
   terminal push, or a push-only command; if there are no scoped changes to
   commit, report that clearly instead of falling back to push-only behavior.
-  Inspect status, keep unrelated/user changes out, follow commit-message
+  Inspect status, keep changes outside the resolved scope out, follow commit-message
   preferences, and stop on ambiguous scope, missing remote, conflicts, secrets,
   or push failures.
 - For a branch without an upstream, obtain the intended remote branch before
   staging or committing for a push, then set tracking on the first push. Do not
   infer the target from another branch that happens to contain the same HEAD.
-- A Git-finish command finalizes only the active task scope already established
-  in the current conversation or an explicit user-selected change set. Never
-  infer that all dirty files are one task from apparent similarity. If scope is
-  ambiguous, stop before staging or writes and ask what to include.
+- Resolve commit scope from explicit user-selected changes, then the active
+  conversation task. With neither, standalone `gi commit`, `gi push`, and
+  `gi commit push` (including Russian aliases) select the current repository's
+  eligible tracked and untracked changes, including pre-existing user changes.
+  Apply this command-defined scope in a new chat without asking whether to
+  include all changes solely because history is absent or many files are dirty.
+  Inspect and briefly report scope and exclusions before staging; exclude
+  secrets, prohibited content, generated noise, and work reserved separately.
+  Do not expand an active task from apparent file similarity. Ask only about
+  concrete conflicting scope instructions or inseparable excluded changes.
+  `gi only push` never selects working-tree files.
 - Git finish does not authorize new implementation, test-expectation rewrites,
   runtime-state deletion, dependency changes, service restart/rebuild, or broad
   cleanup merely to make checks pass. Fix a verification failure only when the

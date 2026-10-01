@@ -1,6 +1,6 @@
 {
   "name": "temple-tunnel",
-  "version": "0.14.2",
+  "version": "0.14.4",
   "description": "Windows VLESS client with simple per-app tunneling",
   "main": "src/main.js",
   "author": "Local build",

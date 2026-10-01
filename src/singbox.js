@@ -150,7 +150,7 @@ function buildDns({ mode, applications, useRussianBypass, customRouting, dnsPres
   };
 }
 
-function buildConfig({ server, applications, mode, russianSitesViaVpn = true, healthPort = 0, bridgePort = 0, tunAddress = '172.31.254.1/30', tunName = 'temple-tun', ruleSetPaths, customRouting, dnsPreset, ipv6Policy = 'block', dnsPolicy = 'routing', directDns }) {
+function buildConfig({ server, applications, mode, russianSitesViaVpn = true, healthPort = 0, bridgePort = 0, tunAddress = '172.31.254.1/30', tunName = 'temple-tun', systemIPv6Disabled = false, ruleSetPaths, customRouting, dnsPreset, ipv6Policy = 'block', dnsPolicy = 'routing', directDns }) {
   if (!server) throw new Error('Сначала выберите сервер.');
   const normalizedApplications = Array.isArray(applications) ? applications : [];
   if (mode === 'selected' && applicationRules(normalizedApplications, {}).length === 0) {
@@ -165,7 +165,8 @@ function buildConfig({ server, applications, mode, russianSitesViaVpn = true, he
     rules.push({ inbound: 'dns-health-in', action: 'hijack-dns' });
     rules.push({ inbound: 'health-in', action: 'route', outbound: 'proxy' });
   }
-  // Capture both families even when IPv6 is disabled: never leave IPv6 outside TUN.
+  // Capture both families for the app's block policy. Only a confirmed OS setting
+  // removes IPv6 addressing; Windows strict_route then blocks IPv6 through WFP.
   if (ipv6Policy === 'block') rules.push({ inbound: 'tun-in', ip_version: 6, action: 'reject' });
   rules.push(
     { action: 'sniff' },
@@ -195,13 +196,14 @@ function buildConfig({ server, applications, mode, russianSitesViaVpn = true, he
     // UDP DNS over the Xray SOCKS bridge can stall while TCP traffic already works.
     // Keep the same resolver, but use HTTPS unless the user chose another provider.
     dns: buildDns({ mode, applications: normalizedApplications, useRussianBypass, customRouting,
-      dnsPreset: bridgePort && (!dnsPreset || dnsPreset === 'legacy') ? 'cloudflare' : dnsPreset, healthPort, ipv6Policy, dnsPolicy, directDns }),
+      dnsPreset: bridgePort && (!dnsPreset || dnsPreset === 'legacy') ? 'cloudflare' : dnsPreset, healthPort,
+      ipv6Policy: systemIPv6Disabled ? 'block' : ipv6Policy, dnsPolicy, directDns }),
     inbounds: [
       {
         type: 'tun',
         tag: 'tun-in',
         interface_name: tunName,
-        address: [tunAddress, 'fd7a:7465:6d70::1/126'],
+        address: systemIPv6Disabled ? [tunAddress] : [tunAddress, 'fd7a:7465:6d70::1/126'],
         mtu: 1500,
         auto_route: true,
         strict_route: true,
