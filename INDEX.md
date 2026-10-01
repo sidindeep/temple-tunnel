@@ -16,3 +16,8 @@
 - [Build and install](patterns/AGENTS_RUNTIME/09-build-and-install.md)
 - [Project memory operations](patterns/AGENTS_RUNTIME/09-project-memory-operations.md)
 - [Git workflow](patterns/GIT_WORKFLOW.md)
+- [Project-memory specification guidance](patterns/PROJECT_MEMORY_SPECIFICATIONS.md)
+- [MODULAR_SERVICE_ENGINEERING.md](patterns/MODULAR_SERVICE_ENGINEERING.md)
+- [SYSTEM_MAP.template.md](templates/SYSTEM_MAP.template.md)
+- [MODULE_PASSPORT.template.md](templates/MODULE_PASSPORT.template.md)
+- [MODULE_CONTRACT.template.md](templates/MODULE_CONTRACT.template.md)

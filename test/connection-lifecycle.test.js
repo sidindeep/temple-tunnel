@@ -14,7 +14,7 @@ async function harness({ strategy = 'auto', probeDelay = 5, verifyError, verifyD
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'temple-lifecycle-'));
   const sourcePath = path.join(__dirname, '../src/main.js');
   const realRequire = createRequire(sourcePath);
-  const seen = { notices: [], probes: [], switches: [], tunStarts: 0, tunNames:[], saves: 0, verified: 0, online: true, reserveChecks:0 };
+  const seen = { notices: [], probes: [], switches: [], logs: [], tunStarts: 0, tunNames:[], saves: 0, verified: 0, online: true, reserveChecks:0 };
   const handlers = {};
   const profiles = ['a','b','c'].map(id=>({id,name:id,host:'192.0.2.1',port:443,transport:'tcp',security:'none',uuid:'test'}));
   if(xhttp)for(const profile of profiles)profile.transport='xhttp';
@@ -23,7 +23,7 @@ async function harness({ strategy = 'auto', probeDelay = 5, verifyError, verifyD
   const context = vm.createContext({
     require(name) {
       if(name==='./connection-notices')return {createConnectionNotices:()=>realRequire(name).createConnectionNotices((title,body)=>seen.notices.push({title,body}))};
-      if(name==='electron')return {net:{isOnline:()=>seen.online},app:{disableHardwareAcceleration(){},requestSingleInstanceLock:()=>true,
+      if(name==='electron')return {net:{isOnline:()=>seen.online},dialog:{showMessageBox:async()=>({response:0})},app:{disableHardwareAcceleration(){},requestSingleInstanceLock:()=>true,
         on(name,handler){handlers[`app:${name}`]=handler;},quit(){seen.quits=(seen.quits||0)+1;},whenReady:()=>({then(){}})},
         ipcMain:{handle:(name,handler)=>{handlers[name]=handler;}}};
       if(name==='./tunnel-pool')return {...realRequire(name),selectOutbound:async(_pool,id,signal)=>{
@@ -62,7 +62,7 @@ async function harness({ strategy = 'auto', probeDelay = 5, verifyError, verifyD
     subscriptions = () => [{id:'sub',servers:profiles}];
     storeSubscriptions = () => {};
     saveState = async () => { seen.saves++; };
-    log = () => {}; pushState = () => {};
+    log = message => { seen.logs.push(message); }; pushState = () => {};
     validateCoreConfig = async () => {};
     let nextPort = 12345; allocateLoopbackPort = async () => nextPort++;
     waitForLocalPort = async () => {};
@@ -176,6 +176,7 @@ test('manual core exit reports VPN stopped before cleanup clears notices',async(
   assert.equal(h.context.snapshot().status,'error');
   assert.equal(h.seen.notices.length,1);
   assert.equal(h.seen.notices[0].title,'VPN отключён');
+  assert.ok(h.seen.logs.some(message=>message.includes('VPN-ядро завершилось неожиданно: код 1')));
  }finally{await h.dispose();}
 });
 
@@ -324,6 +325,22 @@ test('changing selection policy keeps an established healthy tunnel',async()=>{
   } finally {await h.dispose();}
 });
 
+test('core readiness timeout writes its safe diagnosis before the failure code',async()=>{
+  const error=Object.assign(Error('sing-box startup timed out'),{
+    code:'CORE_READY_TIMEOUT',
+    diagnostic:'sing-box: порт отклоняет соединение; вывод: stdout 0, stderr 0; распознанных сообщений от ядра нет'
+  });
+  const h=await harness({verifyError:error});
+  try {
+    await h.context.start();
+    const diagnosis=h.seen.logs.findIndex(message=>message.includes('Диагностика запуска:'));
+    const failure=h.seen.logs.findIndex(message=>message.includes('код: CORE_READY_TIMEOUT'));
+    assert.ok(diagnosis>=0 && failure>diagnosis);
+    assert.match(h.seen.logs[diagnosis],/stdout 0, stderr 0/);
+    assert.equal(h.context.snapshot().status,'error');
+  } finally {await h.dispose();}
+});
+
 test('changing permanent protection to session while disconnected clears WFP filters',async()=>{
   const h=await harness();fakeGuard(h,'always');
   try {
@@ -352,6 +369,78 @@ test('manual stop during a core update cannot reconnect the VPN later',async()=>
     assert.equal(h.seen.tunStarts,2);
     assert.equal(h.seen.rollbacks||0,0);
     assert.equal(h.context.snapshot().status,'disconnected');
+  } finally {await h.dispose();}
+});
+
+test('manual stop during a settings write prevents the late restart',async()=>{
+  const h=await harness();
+  try {
+    await h.context.start();
+    vm.runInContext('saveState = () => new Promise(resolve => { globalThis.releaseSave = resolve; })',h.context);
+    const pending=h.handlers['settings:update'](null,{mode:'bypass'});
+    assert.equal(typeof h.context.releaseSave,'function');
+    await h.context.disconnect();
+    h.context.releaseSave();
+    vm.runInContext('saveState = async () => {}',h.context);
+    await pending;
+    assert.equal(h.context.snapshot().status,'disconnected');
+    assert.equal(h.seen.tunStarts,1);
+  } finally {await h.dispose();}
+});
+
+test('manual stop during subscription selection prevents the late restart',async()=>{
+  const h=await harness();
+  try {
+    await h.context.start();
+    const source=fs.readFileSync(require.resolve('../src/main'),'utf8');
+    vm.runInContext(source.slice(source.indexOf('async function selectSubscription('),source.indexOf('async function refreshSubscription(')),h.context);
+    vm.runInContext(`subscriptions=()=>[{id:'sub',servers:profiles},{id:'other',servers:profiles}];
+      saveState=()=>new Promise(resolve=>{globalThis.releaseSave=resolve;});`,h.context);
+    const pending=h.context.selectSubscription('other');
+    assert.equal(typeof h.context.releaseSave,'function');
+    await h.context.disconnect();
+    h.context.releaseSave();
+    vm.runInContext('saveState=async()=>{}',h.context);
+    await pending;
+    assert.equal(h.context.snapshot().status,'disconnected');
+    assert.equal(h.seen.tunStarts,1);
+  } finally {await h.dispose();}
+});
+
+test('deleting the final subscription clears session protection',async()=>{
+  const h=await harness();fakeGuard(h,'session');
+  try {
+    await h.context.start();
+    const source=fs.readFileSync(require.resolve('../src/main'),'utf8');
+    vm.runInContext(source.slice(source.indexOf('async function deleteSubscription('),source.indexOf('async function selectSubscription(')),h.context);
+    await h.context.deleteSubscription('sub');
+    assert.equal(h.context.snapshot().status,'disconnected');
+    assert.equal(h.seen.guardActive,false);
+  } finally {await h.dispose();}
+});
+
+test('deleting the final subscription retains permanent protection',async()=>{
+  const h=await harness();fakeGuard(h,'always');
+  try {
+    await h.context.start();
+    const source=fs.readFileSync(require.resolve('../src/main'),'utf8');
+    vm.runInContext(source.slice(source.indexOf('async function deleteSubscription('),source.indexOf('async function selectSubscription(')),h.context);
+    await h.context.deleteSubscription('sub');
+    assert.equal(h.context.snapshot().status,'disconnected');
+    assert.equal(h.seen.guardActive,true);
+  } finally {await h.dispose();}
+});
+
+test('failed session cleanup is reported after deleting the final subscription',async()=>{
+  const h=await harness();fakeGuard(h,'session');
+  try {
+    await h.context.start();
+    const source=fs.readFileSync(require.resolve('../src/main'),'utf8');
+    vm.runInContext(source.slice(source.indexOf('async function deleteSubscription('),source.indexOf('async function selectSubscription(')),h.context);
+    vm.runInContext('networkGuard.clear=async()=>{throw Error("Firewall cleanup failed");}',h.context);
+    await assert.rejects(h.context.deleteSubscription('sub'),/Firewall cleanup failed/);
+    assert.equal(h.context.snapshot().status,'disconnected');
+    assert.equal(h.seen.guardActive,true);
   } finally {await h.dispose();}
 });
 
@@ -483,6 +572,16 @@ test('sleep cancels active TUN and wake restores a verified connection',async()=
     await vm.runInContext('networkStableAt=0; pollNetwork()',h.context);
     assert.equal(h.context.snapshot().status,'connected');
     assert.equal(h.context.snapshot().selected,'b');
+  }finally{await h.dispose();}
+});
+test('network change records the reconnect cause before stopping the tunnel',async()=>{
+  const h=await harness();
+  try {
+    await h.context.start();
+    await vm.runInContext("pauseForNetwork('interfaces')",h.context);
+    assert.equal(h.context.snapshot().status,'reconnecting');
+    assert.ok(h.seen.logs.some(message=>message.includes('смена сетевых интерфейсов')));
+    assert.ok(h.seen.logs.some(message=>message.includes('Туннель остановлен')));
   }finally{await h.dispose();}
 });
 

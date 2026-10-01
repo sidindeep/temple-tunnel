@@ -31,6 +31,15 @@ test('custom rules precede application and regional rules; DNS follows domain de
   assert.notEqual(poolKey({dnsPreset:'legacy'},[]),poolKey({dnsPreset:'cloudflare'},[]));
   assert.notEqual(poolKey({customRouting:{}},[]),poolKey({customRouting:{block:['example.com']}},[]));
 });
+test('a www site exception covers its apex and DNS-to-IP routing',()=>{
+  const config=buildConfig({server:{host:'192.0.2.1',port:443,uuid:'test',security:'none'},
+    applications:[],mode:'bypass',customRouting:{direct:['www.avito.ru']}});
+  const directRoute=config.route.rules.find(rule=>rule.outbound==='direct' && rule.domain_suffix);
+  const directDns=config.dns.rules.find(rule=>rule.server==='dns-direct' && rule.domain_suffix?.includes('avito.ru'));
+  assert.deepEqual(directRoute.domain_suffix,['avito.ru','www.avito.ru']);
+  assert.deepEqual(directDns.domain_suffix,directRoute.domain_suffix);
+  assert.equal(config.dns.reverse_mapping,true);
+});
 test('all DNS presets and custom rules pass validation in bundled sing-box',()=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'temple-routing-'));
   try {

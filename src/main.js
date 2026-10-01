@@ -27,6 +27,8 @@ const { normalizeKillSwitch, normalizeIpv6, normalizeDnsPolicy } = require('./se
 const { createGuard, guardArguments } = require('./network-guard');
 const { readImport } = require('./import-source');
 const { createUpdates } = require('./signed-updates');
+const { createSettingsStore } = require('./settings-store');
+const { resolveRunningProcessPath, upgradeRunningApplicationPaths } = require('./process-path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const executeFile = promisify(execFile);
@@ -74,6 +76,7 @@ async function launchSignedInstaller(generation) {
 let networkGuard;
 let activeTunName = '-';
 let manualDisconnectId = 0;
+function manualStopSince(disconnectId) { return manualDisconnectId !== disconnectId; }
 function guardCores() { return [process.execPath, corePath(), xrayPath()]; }
 async function armGuard(tun = '-') {
   if (state.killSwitch === 'off') return;
@@ -112,6 +115,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 
 let mainWindow;
+let processPickerWindow;
 let coreProcess;
 let coreConfigPath;
 let xrayProcess;
@@ -205,13 +209,33 @@ function decrypt(payload, fallback) {
   try {
     return JSON.parse(safeStorage.decryptString(Buffer.from(payload, 'base64')));
   } catch {
-    return fallback;
+    throw new Error('Не удалось расшифровать сохранённые настройки. Исходный файл не изменён.');
   }
 }
 
+let settingsStore;
+let settingsReadOnly = false;
+let settingsBackupAvailable = false;
+function validateStoredSettings(contents) {
+  const stored = JSON.parse(contents);
+  if (!stored || Array.isArray(stored) || typeof stored !== 'object') throw new Error('Некорректный формат настроек.');
+  if (stored.routingEncrypted) normalizeRouting(decrypt(stored.routingEncrypted, {}));
+  if (stored.connectionMemoryEncrypted) decrypt(stored.connectionMemoryEncrypted, {});
+  if (stored.subscriptionsEncrypted && !Array.isArray(decrypt(stored.subscriptionsEncrypted, [])))
+    throw new Error('Список подписок повреждён.');
+  if (stored.subscriptionEncrypted) decrypt(stored.subscriptionEncrypted, '');
+  if (stored.serversEncrypted && !Array.isArray(decrypt(stored.serversEncrypted, [])))
+    throw new Error('Список серверов повреждён.');
+  return stored;
+}
+
 async function loadState() {
+  const defaults = state;
+  settingsStore ||= createSettingsStore(dataFile());
   try {
-    const stored = JSON.parse(await fsp.readFile(dataFile(), 'utf8'));
+    const contents = await settingsStore.read();
+    if (contents === null) return;
+    const stored = validateStoredSettings(contents);
     state = { ...state, ...stored, status: 'disconnected', error: '', warning: '', logs: [] };
     state.customRouting = normalizeRouting(decrypt(stored.routingEncrypted, {}));
     state.dnsPreset = normalizeDns(stored.dnsPreset || 'legacy');
@@ -265,13 +289,31 @@ async function loadState() {
       state.selectedServerId = active.selectedServerId || chooseServerId(active.servers, '');
       migrated = true;
     }
+    settingsStore.accept(contents);
+    if (state.killSwitch !== 'off' && [state.selectedApplications, state.bypassApplications]
+      .some(list => list.some(item => !item.path))) {
+      try {
+        const running = await listRunningProcesses();
+        for (const list of [state.selectedApplications, state.bypassApplications]) {
+          migrated = await upgradeRunningApplicationPaths(list, running,
+            (pid, name) => resolveRunningProcessPath(pid, name, executeFile)) || migrated;
+        }
+      } catch { /* An unavailable process list must not make saved settings unreadable. */ }
+    }
     if (migrated) await saveState();
   } catch (error) {
-    if (error.code !== 'ENOENT') console.error('Failed to load settings:', error.message);
+    state = { ...defaults, status: 'disconnected', error: '',
+      warning: 'Не удалось открыть сохранённые настройки. Исходный файл сохранён; изменение настроек заблокировано. Восстановите резервную копию, если она доступна.',
+      logs: [] };
+    subscriptionCache = undefined;
+    settingsReadOnly = true;
+    settingsBackupAvailable = await settingsStore.hasValidBackup(validateStoredSettings);
+    console.error('Failed to load settings:', error.message);
   }
 }
 
 function saveState() {
+  if (settingsReadOnly) throw new Error('Сохранение заблокировано: настройки не удалось прочитать. Восстановите резервную копию.');
   const persisted = {
     killSwitch: state.killSwitch, ipv6Policy: state.ipv6Policy, dnsPolicy: state.dnsPolicy,
     routingEncrypted: encrypt(state.customRouting),
@@ -289,23 +331,8 @@ function saveState() {
     russianSitesViaVpn: state.russianSitesViaVpn !== false
   };
   const contents = JSON.stringify(persisted, null, 2);
-  const targetPath = dataFile();
-  const temporaryPath = `${targetPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  const write = async () => {
-    await fsp.mkdir(path.dirname(targetPath), { recursive: true });
-    try {
-      await fsp.writeFile(temporaryPath, contents, { mode: 0o600 });
-      try {
-        await fsp.rename(temporaryPath, targetPath);
-      } catch (error) {
-        if (!['EEXIST', 'EPERM'].includes(error.code)) throw error;
-        await fsp.writeFile(targetPath, contents, { mode: 0o600 });
-      }
-    } finally {
-      await fsp.rm(temporaryPath, { force: true }).catch(() => {});
-    }
-  };
-  const pending = saveQueue.catch(() => {}).then(write);
+  settingsStore ||= createSettingsStore(dataFile());
+  const pending = saveQueue.catch(() => {}).then(() => settingsStore.save(contents));
   saveQueue = pending;
   return pending;
 }
@@ -313,7 +340,8 @@ function saveState() {
 function subscriptions() {
   if (subscriptionCache) return subscriptionCache;
   const stored = decrypt(state.subscriptionsEncrypted, []);
-  subscriptionCache = Array.isArray(stored) ? stored : [];
+  if (!Array.isArray(stored)) throw new Error('Список подписок повреждён.');
+  subscriptionCache = stored;
   return subscriptionCache;
 }
 
@@ -463,6 +491,8 @@ function publicState() {
     status: state.status,
     error: state.error,
     warning: state.warning,
+    storageReadOnly: settingsReadOnly,
+    storageBackupAvailable: settingsBackupAvailable,
     recovering: automaticRecoveryActive || confirmingConnection || networkReconnect,
     retryAt: networkReconnect && state.status === 'reconnecting' ? networkRetryAt : 0,
     logs: state.logs.slice(-120)
@@ -613,6 +643,7 @@ async function checkActiveTunnelHealth() {
       return;
     }
     if (result.status === 'ok') { if (activePool) activePool.activeConfirmedAt = Date.now(); return; }
+    log(`Контрольная проверка VPN не прошла (${result.kind === 'dns' ? 'DNS' : 'HTTPS'}, ${result.status === 'timeout' ? 'тайм-аут' : 'ошибка'}); подтверждаем сбой.`);
     const confirmationDeadline = Date.now() + 10000;
     confirmingConnection = true;
     state.warning = checkingMessage;
@@ -629,7 +660,7 @@ async function checkActiveTunnelHealth() {
         return;
       }
       if (Date.now() >= confirmationDeadline) {
-        scheduleFailover('соединение не восстановилось за 10 секунд повторных проверок нескольких адресов');
+        scheduleFailover(`контрольная проверка ${result.kind === 'dns' ? 'DNS' : 'HTTPS'}: ${result.status === 'timeout' ? 'тайм-аут' : 'ошибка'} в течение 10 секунд`);
         return;
       }
     }
@@ -663,8 +694,12 @@ function log(message) {
   scheduleLogPush();
 }
 
-function readDiagnosticCoreLog(child, coreName, chunk) {
+function readDiagnosticCoreLog(child, coreName, chunk, streamName) {
   const message = chunk.toString();
+  if (streamName === 'stdout' || streamName === 'stderr') {
+    child.startupLineCounts ||= { stdout: 0, stderr: 0 };
+    child.startupLineCounts[streamName] = Math.min(9999, child.startupLineCounts[streamName] + 1);
+  }
   if (/authentication failed|invalid user|invalid password/i.test(message)) child.authErrorCount = (child.authErrorCount || 0) + 1;
   // Inspect each line independently: a chunk can contain unrelated startup and network messages.
   if (message.split(/\r?\n/).some(isLocalCoreFailure)) {
@@ -673,6 +708,7 @@ function readDiagnosticCoreLog(child, coreName, chunk) {
   }
   const diagnostic = coreDiagnostic(message);
   if (!diagnostic) return;
+  child.startupLastDiagnostic = diagnostic;
   if (child.lastDiagnostic === diagnostic && Date.now() - child.lastDiagnosticAt < 1000) return;
   child.lastDiagnostic = diagnostic;
   child.lastDiagnosticAt = Date.now();
@@ -856,7 +892,7 @@ async function waitForLocalPort(child, port, timeoutMs = 8000, processName = 'Xr
     try {
       await new Promise((resolve, reject) => {
         const socket = net.createConnection({ host: '127.0.0.1', port });
-        socket.setTimeout(800, () => socket.destroy(new Error('тайм-аут')));
+        socket.setTimeout(800, () => socket.destroy(Object.assign(new Error('тайм-аут'), { code: 'ETIMEDOUT' })));
         socket.once('connect', () => { socket.destroy(); resolve(); });
         socket.once('error', reject);
       });
@@ -866,7 +902,19 @@ async function waitForLocalPort(child, port, timeoutMs = 8000, processName = 'Xr
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
   }
-  throw connectionError('CORE_READY_TIMEOUT', `${processName}: Windows не завершила запуск локального VPN-ядра за отведённое время.`);
+  const socketResult = {
+    ECONNREFUSED: 'порт отклоняет соединение',
+    ETIMEDOUT: 'проверка порта не получила ответа',
+    EADDRNOTAVAIL: 'локальный адрес недоступен',
+    EHOSTUNREACH: 'локальный адрес недостижим'
+  }[lastError?.code] || 'состояние порта не определено';
+  const counts = child.startupLineCounts || { stdout: 0, stderr: 0 };
+  const diagnostic = child.startupLastDiagnostic || 'распознанных сообщений от ядра нет';
+  const error = connectionError('CORE_READY_TIMEOUT', `${processName}: Windows не завершила запуск локального VPN-ядра за отведённое время.`);
+  error.diagnostic = `${processName}: локальный порт не открылся за ${timeoutMs} мс; `
+    + `процесс ${child.exitCode === null ? 'работает' : 'завершился'}; ${socketResult}; `
+    + `вывод: stdout ${counts.stdout}, stderr ${counts.stderr}; последний признак: ${diagnostic}`;
+  throw error;
 }
 
 function validateCoreConfig(executable, args, fallbackMessage, signal) {
@@ -949,7 +997,7 @@ function nextFailoverServer(failedId) {
 
 function scheduleFailover(reason) {
   if (networkSuspended || electronNet?.isOnline() === false) {
-    void pauseForNetwork();
+    void pauseForNetwork(networkSuspended ? 'suspend' : 'offline');
     return;
   }
   if (autoReconnectTimer) return;
@@ -983,6 +1031,7 @@ function scheduleFailover(reason) {
   recordResult(selectionHistory().history, failedId, { status: 'error', reason: 'network' });
   if (failedId) failedServerIds.add(failedId);
   const next = nextFailoverServer(failedId);
+  const disconnectId = manualDisconnectId;
 
   state.error = '';
   if (!next) {
@@ -995,6 +1044,7 @@ function scheduleFailover(reason) {
     state.warning = warning;
     pushState();
     void stopTunnel({ keepRecovery: true }).then(() => {
+      if (manualStopSince(disconnectId)) return;
       state.status = 'error';
       state.warning = warning;
       log(`Автопереключение остановлено: ${reason}`);
@@ -1025,9 +1075,11 @@ function scheduleFailover(reason) {
         storeSubscriptions(saved);
       }
       await saveState();
+      if (manualStopSince(disconnectId) || !automaticRecoveryActive) return;
       pushState();
       await startTunnel({ automatic: true });
     } catch (error) {
+      if (manualStopSince(disconnectId)) return;
       automaticRecoveryActive = false;
       state.status = 'error';
       state.warning = `Не удалось автоматически переключить сервер: ${error.message}`;
@@ -1100,10 +1152,16 @@ function selectionHistory() {
   return memory;
 }
 
-async function pauseForNetwork() {
+async function pauseForNetwork(cause = 'offline') {
   if (networkTransition) return networkTransition;
   if (networkReconnect && !coreProcess && !connectionController) return;
   if (!isTunnelActive()) return;
+  const causeLabel = {
+    suspend: 'сон компьютера',
+    interfaces: 'смена сетевых интерфейсов',
+    offline: 'Windows сообщает об отсутствии сети'
+  }[cause] || 'изменение доступности сети';
+  log(`VPN приостановлен: ${causeLabel}.`);
   networkReconnect = true;
   networkRetryAt = 0;
   const pending = (async () => {
@@ -1112,7 +1170,7 @@ async function pauseForNetwork() {
     state.status = 'reconnecting';
     state.warning = networkSuspended ? 'Компьютер спит. VPN восстановится после пробуждения.'
       : 'Ожидаем восстановления сети…';
-    log('Восстановление приостановлено: изменение доступности сети.');
+    log('Туннель остановлен; ожидаем восстановления сети.');
     pushState();
   })();
   networkTransition = pending;
@@ -1129,7 +1187,7 @@ async function pollNetwork() {
   networkSignature = signature;
   if (networkSuspended || networkTransition) return;
   if (changed || electronNet?.isOnline() === false) {
-    await pauseForNetwork();
+    await pauseForNetwork(changed ? 'interfaces' : 'offline');
     return;
   }
   if (!networkReconnect || Date.now() - networkStableAt < 2000 || Date.now() < networkRetryAt) return;
@@ -1196,7 +1254,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
   if (operationId !== tunnelOperationId) return;
   if (networkSuspended || electronNet?.isOnline() === false) {
     if (!isTunnelActive()) state.status = 'connecting';
-    await pauseForNetwork();
+    await pauseForNetwork(networkSuspended ? 'suspend' : 'offline');
     return;
   }
   networkReconnect = false;
@@ -1204,7 +1262,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
   if (operationId !== tunnelOperationId) return;
   const startedAt = Date.now();
   const stage = (message) => log(`[Подключение ${operationId}, +${Date.now() - startedAt} мс] ${message}`);
-  stage(automatic ? 'Автоматическое подключение.' : 'Ручное подключение.');
+  stage(automatic ? 'Автоматическое переключение сервера.' : retry ? 'Повторное подключение после смены сети.' : 'Подключение запрошено.');
   let startedCore;
   let startedXray;
   let coreConfigFile;
@@ -1340,8 +1398,8 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
       });
       startedXray = xrayChild;
       xrayProcess = xrayChild;
-      attachCoreLogReader(xrayChild.stdout, line => readDiagnosticCoreLog(xrayChild, 'Xray', line));
-      attachCoreLogReader(xrayChild.stderr, line => readDiagnosticCoreLog(xrayChild, 'Xray', line));
+      attachCoreLogReader(xrayChild.stdout, line => readDiagnosticCoreLog(xrayChild, 'Xray', line, 'stdout'));
+      attachCoreLogReader(xrayChild.stderr, line => readDiagnosticCoreLog(xrayChild, 'Xray', line, 'stderr'));
       xrayChild.on('error', (error) => {
         if (xrayProcess !== xrayChild) return;
         xrayChild.startError = error;
@@ -1368,6 +1426,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
           try { runningCore.kill('SIGTERM'); } catch {}
         }
         if (!['connecting', 'disconnecting'].includes(state.status)) {
+          log(`Xray завершился неожиданно: код ${Number.isInteger(code) ? code : 'не указан'}.`);
           scheduleFailover(`XHTTP-движок остановился${code ? ` с кодом ${code}` : ''}`);
         }
       });
@@ -1433,11 +1492,8 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
     child.stdin?.on('error', () => {});
     startedCore = child;
     coreProcess = child;
-    const readCoreLog = (chunk) => {
-      readDiagnosticCoreLog(child, 'sing-box', chunk);
-    };
-    attachCoreLogReader(child.stdout, readCoreLog);
-    attachCoreLogReader(child.stderr, readCoreLog);
+    attachCoreLogReader(child.stdout, line => readDiagnosticCoreLog(child, 'sing-box', line, 'stdout'));
+    attachCoreLogReader(child.stderr, line => readDiagnosticCoreLog(child, 'sing-box', line, 'stderr'));
     child.on('error', (error) => {
       if (coreProcess !== child) return;
       child.startError = error;
@@ -1457,6 +1513,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
         try { runningXray.kill('SIGTERM'); } catch {}
       }
       if (!['connecting', 'disconnecting'].includes(state.status)) {
+        log(`VPN-ядро завершилось неожиданно: код ${Number.isInteger(code) ? code : 'не указан'}.`);
         scheduleFailover(`VPN-туннель остановился${code ? ` с кодом ${code}` : ''}`);
       } else {
         if (state.status === 'disconnecting') {
@@ -1515,6 +1572,8 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
     pushState();
   } catch (error) {
     const staleOperation = operationId !== tunnelOperationId || error.code === 'TUNNEL_SUPERSEDED' || signal.aborted;
+    if (!staleOperation && error.code === 'CORE_READY_TIMEOUT' && error.diagnostic)
+      stage(`Диагностика запуска: ${error.diagnostic}`);
     if (coreProcess === startedCore) coreProcess = null;
     if (xrayProcess === startedXray) xrayProcess = null;
     if (!staleOperation) activeHealthPort = 0;
@@ -1563,6 +1622,7 @@ async function addSubscription({ name, source }) {
   const cleanSource = String(source || '').trim();
   if (!cleanSource) throw new Error('Введите ссылку подписки или VLESS-ключ.');
   const downloaded = await downloadSubscription(cleanSource);
+  const disconnectId = manualDisconnectId;
   const saved = subscriptions();
   const id = crypto.randomUUID();
   const cleanName = String(name || '').trim().slice(0, 80) || `Подписка ${saved.length + 1}`;
@@ -1578,7 +1638,7 @@ async function addSubscription({ name, source }) {
   state.serversEncrypted = '';
   serverLatencies = new Map();
   await saveState();
-  if (tunnelRunning) await startTunnel();
+  if (tunnelRunning && !manualStopSince(disconnectId)) await startTunnel();
   else pushState();
   return publicState();
 }
@@ -1595,6 +1655,7 @@ async function updateSubscription({ id, name, source }) {
   if (!nameChanged && !sourceChanged) return publicState();
   let downloaded;
   if (sourceChanged) downloaded = await downloadSubscription(cleanSource);
+  const disconnectId = manualDisconnectId;
 
   const active = stored.id === state.activeSubscriptionId;
   const tunnelRunning = isTunnelActive();
@@ -1613,7 +1674,7 @@ async function updateSubscription({ id, name, source }) {
     serverLatencies = new Map();
   }
   await saveState();
-  if (active && sourceChanged && tunnelRunning) await startTunnel();
+  if (active && sourceChanged && tunnelRunning && !manualStopSince(disconnectId)) await startTunnel();
   else pushState();
   return publicState();
 }
@@ -1634,6 +1695,7 @@ async function deleteSubscription(id) {
     noLink: true
   });
   if (confirmation.response !== 0) return publicState();
+  const disconnectId = manualDisconnectId;
 
   const wasActive = removed.id === state.activeSubscriptionId;
   const tunnelRunning = isTunnelActive();
@@ -1648,14 +1710,15 @@ async function deleteSubscription(id) {
     storeSubscriptions(saved);
   }
   await saveState();
-  if (wasActive && tunnelRunning) {
-    if (saved.length) await startTunnel();
-    else await stopTunnel({ immediate: true });
+  if (wasActive && !manualStopSince(disconnectId)) {
+    if (!saved.length) await manualDisconnect();
+    else if (tunnelRunning) await startTunnel();
   } else pushState();
   return publicState();
 }
 
 async function selectSubscription(id) {
+  const disconnectId = manualDisconnectId;
   const saved = subscriptions();
   const selectedSubscription = saved.find((item) => item.id === id);
   if (!selectedSubscription) throw new Error('Подписка не найдена.');
@@ -1672,7 +1735,7 @@ async function selectSubscription(id) {
   state.selectedServerId = selectedSubscription.selectedServerId;
   serverLatencies = new Map();
   await saveState();
-  if (tunnelRunning) await startTunnel();
+  if (tunnelRunning && !manualStopSince(disconnectId)) await startTunnel();
   else pushState();
   return publicState();
 }
@@ -1685,6 +1748,7 @@ async function refreshSubscription({ automatic = false } = {}) {
   const url = active?.source || subscriptionUrl();
   if (!active || !url) throw new Error('Сначала добавьте подписку.');
   const operationId = tunnelOperationId;
+  const disconnectId = manualDisconnectId;
   const downloaded = await downloadSubscription(url);
   const saved = subscriptions();
   const storedActive = saved.find((item) => item.id === active.id);
@@ -1715,7 +1779,7 @@ async function refreshSubscription({ automatic = false } = {}) {
   state.selectedServerId = storedActive.selectedServerId;
   serverLatencies = new Map();
   await saveState();
-  if (tunnelRunning && !automatic) await startTunnel();
+  if (tunnelRunning && !automatic && !manualStopSince(disconnectId)) await startTunnel();
   else pushState();
   if (automatic) log(`Список серверов автоматически обновлён: ${downloaded.length}.`);
   return publicState();
@@ -1747,6 +1811,42 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+}
+
+async function openProcessPicker() {
+  if (processPickerWindow && !processPickerWindow.isDestroyed()) {
+    processPickerWindow.focus();
+    return;
+  }
+  const picker = new BrowserWindow({
+    parent: mainWindow,
+    modal: true,
+    show: false,
+    width: 650,
+    height: 570,
+    minWidth: 480,
+    minHeight: 360,
+    backgroundColor: '#171a20',
+    title: 'Выбор запущенного процесса',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'process-picker-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  processPickerWindow = picker;
+  picker.on('closed', () => { if (processPickerWindow === picker) processPickerWindow = undefined; });
+  picker.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  picker.webContents.on('will-navigate', (event) => event.preventDefault());
+  try {
+    await picker.loadFile(path.join(__dirname, 'renderer', 'process-picker.html'));
+    if (!picker.isDestroyed()) picker.show();
+  } catch (error) {
+    if (!picker.isDestroyed()) picker.close();
+    throw error;
+  }
 }
 
 app.on('second-instance', () => {
@@ -1788,6 +1888,24 @@ app.whenReady().then(async () => {
   }
 
   ipcMain.handle('state:get', () => publicState());
+  ipcMain.handle('storage:restore-backup', async () => {
+    if (!settingsReadOnly || !settingsBackupAvailable) throw new Error('Доступной резервной копии настроек нет.');
+    const confirmation = await dialog.showMessageBox(mainWindow, {
+      type: 'warning', title: 'Восстановить настройки?',
+      message: 'Восстановить последнюю резервную копию настроек?',
+      detail: 'Текущий нечитаемый файл будет сохранён отдельно. Более новые изменения после резервной копии могут отсутствовать.',
+      buttons: ['Восстановить', 'Отмена'], defaultId: 1, cancelId: 1, noLink: true
+    });
+    if (confirmation.response !== 0) return publicState();
+    await settingsStore.restore(validateStoredSettings);
+    settingsReadOnly = false;
+    settingsBackupAvailable = false;
+    await loadState();
+    if (settingsReadOnly) throw new Error('Восстановленная копия не прошла повторную проверку.');
+    state.warning = 'Настройки восстановлены из резервной копии. Проверьте подписки и выбранный сервер.';
+    pushState();
+    return publicState();
+  });
   ipcMain.handle('subscription:set', async (_event, input) => addSubscription(
     typeof input === 'string' ? { source: input } : (input || {})
   ));
@@ -1860,6 +1978,7 @@ app.whenReady().then(async () => {
     return publicState();
   });
   ipcMain.handle('apps:add', async () => {
+    const disconnectId = manualDisconnectId;
     const result = await dialog.showOpenDialog(mainWindow, {
       title: 'Выберите приложения',
       properties: ['openFile', 'multiSelections'],
@@ -1874,6 +1993,11 @@ app.whenReady().then(async () => {
       const processName = path.basename(filePath);
       const identity = filePath.toLowerCase();
       if (!knownApplications.has(identity)) {
+        const nameOnly = target.findIndex(item => !item.path && applicationProcessName(item).toLowerCase() === processName.toLowerCase());
+        if (nameOnly !== -1) {
+          target.splice(nameOnly, 1);
+          knownApplications.delete(processName.toLowerCase());
+        }
         target.push({
           name: path.basename(filePath, '.exe'),
           processName,
@@ -1886,26 +2010,42 @@ app.whenReady().then(async () => {
     }
     if (!changed) return publicState();
     await saveState();
+    if (manualStopSince(disconnectId)) { pushState(); return publicState(); }
     if (shouldRestart) await startTunnel();
     else { if (state.killSwitch === 'always' || networkGuard?.active) await armGuard(); pushState(); }
     return publicState();
   });
+  ipcMain.handle('apps:open-process-picker', () => openProcessPicker());
+  ipcMain.handle('apps:close-process-picker', (event) => {
+    if (processPickerWindow?.webContents === event.sender) processPickerWindow.close();
+  });
   ipcMain.handle('apps:list-running', async () => listRunningProcesses());
   ipcMain.handle('apps:add-process', async (_event, input) => {
+    const disconnectId = manualDisconnectId;
     const processName = String(input?.processName || '').trim();
     if (!/^[^\\/:*?"<>|]+\.exe$/i.test(processName)) throw new Error('Укажите имя процесса из списка диспетчера задач.');
-    if (state.killSwitch !== 'off') throw new Error('При включённом Kill switch добавляйте приложение кнопкой «EXE-файл», чтобы указать путь к файлу.');
+    const pid = Number(input?.pid);
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Процесс больше не запущен. Обновите список процессов.');
+    const filePath = await resolveRunningProcessPath(pid, processName, executeFile);
+    if (state.killSwitch !== 'off' && !filePath)
+      throw new Error('Не удалось определить EXE-файл этого процесса для Kill switch. Добавьте его кнопкой «EXE-файл».');
     const shouldRestart = isTunnelActive();
     const target = state.mode === 'bypass' ? state.bypassApplications : state.selectedApplications;
-    if (!target.some((item) => applicationIdentity(item) === processName.toLowerCase())) {
-      target.push({ name: path.basename(processName, '.exe'), processName, path: '', custom: true });
+    const identity = (filePath || processName).toLowerCase();
+    if (!target.some((item) => applicationIdentity(item) === identity
+      || (!filePath && applicationProcessName(item).toLowerCase() === processName.toLowerCase()))) {
+      const nameOnly = filePath ? target.findIndex(item => !item.path && applicationProcessName(item).toLowerCase() === processName.toLowerCase()) : -1;
+      if (nameOnly !== -1) target.splice(nameOnly, 1);
+      target.push({ name: path.basename(processName, '.exe'), processName, path: filePath, custom: true });
       await saveState();
+      if (manualStopSince(disconnectId)) { pushState(); return publicState(); }
       if (shouldRestart) await startTunnel();
       else { if (state.killSwitch === 'always' || networkGuard?.active) await armGuard(); pushState(); }
     }
     return publicState();
   });
   ipcMain.handle('routing:add-direct', async (_event, value) => {
+    const disconnectId = manualDisconnectId;
     let entry = String(value || '').trim();
     if (!entry) throw new Error('Введите домен, например vk.ru.');
     // The quick exception field is user-facing and accepts a pasted website URL.
@@ -1923,22 +2063,26 @@ app.whenReady().then(async () => {
     if (JSON.stringify(customRouting) === JSON.stringify(state.customRouting)) return publicState();
     state.customRouting = customRouting;
     await saveState();
+    if (manualStopSince(disconnectId)) { pushState(); return publicState(); }
     if (isTunnelActive()) await startTunnel();
     else { if (state.killSwitch === 'always' || networkGuard?.active) await armGuard(); pushState(); }
     return publicState();
   });
   ipcMain.handle('routing:remove-direct', async (_event, value) => {
+    const disconnectId = manualDisconnectId;
     const entry = String(value || '').trim().toLowerCase();
     if (!entry) return publicState();
     const customRouting = normalizeRouting({ ...state.customRouting, direct: state.customRouting.direct.filter((item) => item !== entry) });
     if (JSON.stringify(customRouting) === JSON.stringify(state.customRouting)) return publicState();
     state.customRouting = customRouting;
     await saveState();
+    if (manualStopSince(disconnectId)) { pushState(); return publicState(); }
     if (isTunnelActive()) await startTunnel();
     else { if (state.killSwitch === 'always' || networkGuard?.active) await armGuard(); pushState(); }
     return publicState();
   });
   ipcMain.handle('apps:remove', async (_event, appPath) => {
+    const disconnectId = manualDisconnectId;
     const shouldRestart = isTunnelActive();
     const listKey = state.mode === 'bypass' ? 'bypassApplications' : 'selectedApplications';
     const previousLength = state[listKey].length;
@@ -1947,11 +2091,13 @@ app.whenReady().then(async () => {
     state[listKey] = next;
     if (state[listKey].length === previousLength) return publicState();
     await saveState();
+    if (manualStopSince(disconnectId)) { pushState(); return publicState(); }
     if (shouldRestart) await startTunnel();
     else { if (state.killSwitch === 'always' || networkGuard?.active) await armGuard(); pushState(); }
     return publicState();
   });
   ipcMain.handle('apps:toggle', async (_event, application) => {
+    const disconnectId = manualDisconnectId;
     if (state.mode !== 'selected') return publicState();
     const shouldRestart = isTunnelActive();
     const key = applicationIdentity(application);
@@ -1975,11 +2121,13 @@ app.whenReady().then(async () => {
       });
     }
     await saveState();
+    if (manualStopSince(disconnectId)) { pushState(); return publicState(); }
     if (shouldRestart) await startTunnel();
     else { if (state.killSwitch === 'always' || networkGuard?.active) await armGuard(); pushState(); }
     return publicState();
   });
   ipcMain.handle('settings:update', async (_event, update) => {
+    const disconnectId = manualDisconnectId;
     // Validate all new fields before mutating any preferences.
     const customRouting = update.customRouting === undefined ? undefined : normalizeRouting(update.customRouting);
     const dnsPreset = update.dnsPreset === undefined ? undefined : normalizeDns(update.dnsPreset);
@@ -2045,6 +2193,7 @@ app.whenReady().then(async () => {
     }
     if (!routingChanged && !preferenceChanged) return publicState();
     await saveState();
+    if (manualStopSince(disconnectId)) { pushState(); return publicState(); }
     if (tunnelRunning && routingChanged) await startTunnel();
     else {
       if (!tunnelRunning && state.killSwitch === 'always') await armGuard();
@@ -2055,6 +2204,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle('tunnel:toggle', async () => {
     if (isTunnelActive()) {
+      log('Отключение VPN запрошено кнопкой приложения.');
       await manualDisconnect();
     } else {
       await startTunnel();
@@ -2091,6 +2241,8 @@ app.whenReady().then(async () => {
     if (state.killSwitch === 'always') await armGuard();
     else if (networkGuard.active) state.warning = 'После предыдущего завершения осталась блокировка Kill switch. Подключите VPN или отключите Kill switch в настройках.';
   } catch (error) { state.warning = error.message; }
+  if (settingsReadOnly && !state.warning.includes('Не удалось открыть сохранённые настройки'))
+    state.warning = `Не удалось открыть сохранённые настройки. Изменения заблокированы. ${state.warning}`;
   createWindow();
   void refreshRussianRules();
   void autoRefreshSubscription();
@@ -2098,7 +2250,7 @@ app.whenReady().then(async () => {
   subscriptionTimer.unref?.();
   healthTimer = setInterval(() => void checkActiveTunnelHealth(), 10000);
   healthTimer.unref?.();
-  powerMonitor?.on('suspend', () => { networkSuspended = true; void pauseForNetwork(); });
+  powerMonitor?.on('suspend', () => { networkSuspended = true; void pauseForNetwork('suspend'); });
   powerMonitor?.on('resume', () => { networkSuspended = false; networkStableAt = Date.now(); });
   networkTimer = setInterval(() => void pollNetwork().catch(() => {}), 2000);
   networkTimer.unref?.();

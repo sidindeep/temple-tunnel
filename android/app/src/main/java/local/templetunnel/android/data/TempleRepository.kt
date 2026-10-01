@@ -19,10 +19,17 @@ class TempleRepository(context: Context) {
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
 
-    @Synchronized fun load(): AppSnapshot = runCatching { decode(prefs.getString("snapshot", null) ?: return AppSnapshot()) }.getOrDefault(AppSnapshot())
-    @Synchronized fun save(snapshot: AppSnapshot) { prefs.edit().putString("snapshot", encode(snapshot).toString()).apply() }
+    @Synchronized fun load(): AppSnapshot {
+        val saved = prefs.getString("snapshot", null) ?: return AppSnapshot()
+        return decode(saved)
+    }
+    @Synchronized fun save(snapshot: AppSnapshot) {
+        check(prefs.edit().putString("snapshot", encode(snapshot).toString()).commit()) { "Не удалось сохранить настройки" }
+    }
 
     fun import(name: String, source: String): Subscription {
+        require(source.toByteArray().size <= 256 * 1024) { "Ссылка или ключ слишком большие" }
+        require(!source.trim().startsWith("http://", true)) { "Подписка допускает только HTTPS" }
         val body = if (source.trim().startsWith("https://", true)) download(source.trim()) else source
         return Subscription(UUID.randomUUID().toString(), name.ifBlank { "Подписка" }, source.trim(), SubscriptionParser.parse(body))
     }
@@ -33,6 +40,7 @@ class TempleRepository(context: Context) {
     }
 
     private fun download(source: String): String {
+        require(URL(source).protocol == "https") { "Подписка допускает только HTTPS" }
         val connection = (URL(source).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15_000; readTimeout = 15_000; instanceFollowRedirects = false
             setRequestProperty("Accept", "text/plain, application/octet-stream;q=0.9")

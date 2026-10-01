@@ -8,12 +8,13 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 
 object SubscriptionParser {
-    private const val MAX_SOURCE_BYTES = 256 * 1024
+    private const val MAX_SUBSCRIPTION_BYTES = 5 * 1024 * 1024
     private val supportedTransports = setOf("tcp", "grpc", "ws", "websocket", "httpupgrade", "http", "h2", "xhttp")
 
     fun parse(body: String): List<ServerProfile> {
-        require(body.toByteArray().size <= MAX_SOURCE_BYTES) { "Подписка слишком большая" }
+        require(body.toByteArray().size <= MAX_SUBSCRIPTION_BYTES) { "Подписка слишком большая" }
         val decoded = decode(body)
+        require(decoded.toByteArray().size <= MAX_SUBSCRIPTION_BYTES) { "Подписка слишком большая" }
         val result = linkedMapOf<String, ServerProfile>()
         var firstError: Throwable? = null
         decoded.lineSequence().map(String::trim).filter(String::isNotEmpty).forEach { line ->

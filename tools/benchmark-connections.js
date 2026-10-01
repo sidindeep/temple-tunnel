@@ -15,7 +15,8 @@ const improved=process.argv.includes('--improved');
 const paired=process.argv.includes('--paired');
 const boundInterface=process.env.TEMPLE_BENCH_INTERFACE;
 report.backendSocketsBoundToPhysicalInterface=Boolean(boundInterface);
-const output=path.join(__dirname,`../artifacts/connection-benchmark-${paired?'paired':improved?'improved':'baseline'}${boundInterface?'-physical':''}.json`);
+const output=path.join(__dirname,`../diagnostics/runs/connection-benchmark-${paired?'paired':improved?'improved':'baseline'}${boundInterface?'-physical':''}.json`);
+fs.mkdirSync(path.dirname(output),{recursive:true});
 app.whenReady().then(async()=>{
   try {
     const settings=JSON.parse(fs.readFileSync(path.join(data,'settings.json')));

@@ -47,7 +47,9 @@ app.whenReady().then(async()=>{
  }catch(e){results.push({error:e.code||e.name});}
  finally{
   await Promise.all(children.map(c=>new Promise(resolve=>{if(c.exitCode!==null)return resolve();c.once('exit',resolve);c.kill();})));
-  fs.writeFileSync(path.join(__dirname,'../artifacts/true-switch-check.json'),JSON.stringify(results,null,2));
+  const output=path.join(__dirname,'../diagnostics/runs/true-switch-check.json');
+  fs.mkdirSync(path.dirname(output),{recursive:true});
+  fs.writeFileSync(output,JSON.stringify(results,null,2));
   fs.rmSync(scratch,{recursive:true,force:true});app.exit();
  }
 });

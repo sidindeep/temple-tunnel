@@ -18,6 +18,12 @@ language preferences.
 - `gi коммит пуш` means the same as `gi пуш`.
 - `gi только пуш` means push existing local commits only; do not create a new
   commit for this command.
+- A project-local statement that the user normally creates commits is a default,
+  not a veto of these explicit commands. If a project instead unconditionally
+  forbids agent-created commits, follow that specific rule and report that
+  `gi пуш` cannot complete until the project rule changes. Do not advise a
+  manual commit followed by `gi пуш`: that command does not fall back to
+  push-only behavior.
 - Do not reinterpret `gi пуш` as a raw `git push`, a retry of a previous
   terminal push, or a push-only command. Push-only behavior is reserved for
   `gi только пуш`.
@@ -81,16 +87,19 @@ Before any `gi коммит`, `gi пуш`, `gi коммит пуш`, or `gi то
   change was already authorized, otherwise leave it unstaged and report it;
 - inspect staged and unstaged changes with compact stats or targeted checks;
 - identify the current branch and configured remote;
+- for a push, identify the upstream before staging or committing. If it is
+  absent, ask which remote branch to use and set tracking on the first push;
+  never infer the destination from another remote branch containing HEAD;
 - keep user/unrelated changes out of the commit;
 - stop and explain the blocker if scope is ambiguous, conflicts are present,
   secrets may be included, the project is not a git repository, no remote is
   configured for a push, or push fails.
-- Run project-local mandatory verification gates only when they apply to the
-  established scope. A failing check authorizes a correction only when the
-  failure was caused by that scoped work and the correction is already within
-  the original task authorization. Otherwise report the failure and stop the
-  finish; do not repair unrelated code or tests, delete runtime state, or
-  rebuild/restart services solely because `gi пуш` was requested.
+- Do not start a project-memory audit, feature work, or new product test cycle
+  solely because Git finish was requested. Implementation work completes its
+  own writeback and verification. Follow a more specific project-local
+  finish-time gate when one is expressly required; a failing gate does not
+  authorize unrelated code or test repairs, runtime deletion, or service
+  rebuilds/restarts.
 
 For `gi коммит`:
 

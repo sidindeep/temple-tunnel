@@ -3,6 +3,7 @@ node_modules/
 .cache/
 dist/
 artifacts/
+diagnostics/
 android/.gradle/
 android/local.properties
 android/**/build/

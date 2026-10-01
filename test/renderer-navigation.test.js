@@ -54,7 +54,9 @@ async function fixture() {
     onStateChanged: fn => { changed = fn; },
     updateSettings: async patch => { calls.push(patch); state = { ...state, ...patch }; return state; },
     toggleTunnel: async () => { calls.push('power'); return state; },
-    pingServers: async () => { calls.push('ping'); return state; }
+    pingServers: async () => { calls.push('ping'); return state; },
+    openProcessPicker: async () => { calls.push('process-picker'); },
+    restoreSettingsBackup: async () => { calls.push('restore-backup'); state = { ...state, storageReadOnly:false, storageBackupAvailable:false }; return state; }
   };
   const document = {
     getElementById: id => { assert.ok(nodes.has(id), `Unknown HTML id ${id}`); return nodes.get(id); },
@@ -89,6 +91,18 @@ test('navigation moves management to its own page and home search preserves sele
   assert.match(nodes.get('homeEmptyServers').textContent, /не найдены/);
 });
 
+test('storage recovery action appears only for an unreadable store with a backup', async () => {
+  const { nodes, calls, update } = await fixture();
+  const button = nodes.get('restoreBackupButton');
+  update({ warning:'Настройки недоступны', storageReadOnly:true, storageBackupAvailable:false });
+  assert.equal(button.hidden,true);
+  update({ storageBackupAvailable:true });
+  assert.equal(button.hidden,false);
+  await button.click();
+  assert.deepEqual(calls,['restore-backup']);
+  assert.equal(button.hidden,true);
+});
+
 test('home controls share connection actions, mode validation and state updates', async () => {
   const { nodes, calls, update } = await fixture();
   await nodes.get('homePowerButton').click();
@@ -108,4 +122,11 @@ test('home controls share connection actions, mode validation and state updates'
   update({ status: 'error', error: 'Test failure', servers: [] });
   assert.equal(nodes.get('errorBanner').hidden, false);
   assert.match(nodes.get('homeEmptyServers').textContent, /Добавьте подписку/);
+});
+
+test('process button opens a separate picker window', async () => {
+  const { nodes, calls } = await fixture();
+  await nodes.get('listProcessesButton').click();
+  assert.deepEqual(calls, ['process-picker']);
+  assert.equal(nodes.has('runningProcesses'), false);
 });

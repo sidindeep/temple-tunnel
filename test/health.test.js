@@ -8,6 +8,7 @@ const path = require('node:path');
 function harness(results, cancel = false) {
   let now = 0;
   let calls = 0;
+  const messages = [];
   const sourcePath = path.join(__dirname, '../src/main.js');
   const realRequire = createRequire(sourcePath);
   const context = vm.createContext({
@@ -22,16 +23,16 @@ function harness(results, cancel = false) {
     },
     Date: class extends Date { static now() { return now; } },
     setTimeout(fn, ms) { now += ms; queueMicrotask(fn); return {unref(){}}; },
-    clearTimeout() {}, console, process, Buffer, __dirname: path.dirname(sourcePath)
+    clearTimeout() {}, console, process, Buffer, messages, __dirname: path.dirname(sourcePath)
   });
   vm.runInContext(fs.readFileSync(sourcePath,'utf8') + `
     let failures = 0;
     scheduleFailover = () => { failures++; };
     pushState = () => {};
-    log = () => {};
+    log = message => { messages.push(message); };
     state.status = 'connected'; activeHealthPort = 12345; state.selectedServerId = 'test';
     globalThis.check = checkActiveTunnelHealth;
-    globalThis.snapshot = () => ({failures, warning: state.warning, confirmingConnection});
+    globalThis.snapshot = () => ({failures, warning: state.warning, confirmingConnection, messages});
   `, context);
   return {context, calls: () => calls};
 }
@@ -49,6 +50,7 @@ test('persistent outage requires ten seconds of confirmation', async () => {
   const h = harness(['timeout']); await h.context.check();
   assert.equal(h.context.snapshot().failures, 1);
   assert.equal(h.calls(), 11);
+  assert.match(h.context.snapshot().messages.join('\n'), /Контрольная проверка VPN не прошла \(HTTPS, тайм-аут\)/);
 });
 test('manual stop during confirmation prevents failover', async () => {
   const h = harness(['timeout'], true); await h.context.check();

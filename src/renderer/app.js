@@ -35,6 +35,7 @@ const elements = {
   warningBanner: document.getElementById('warningBanner'),
   warningText: document.getElementById('warningText'),
   cancelReconnectButton: document.getElementById('cancelReconnectButton'),
+  restoreBackupButton: document.getElementById('restoreBackupButton'),
   errorBanner: document.getElementById('errorBanner'),
   subscriptionList: document.getElementById('subscriptionList'),
   emptySubscriptions: document.getElementById('emptySubscriptions'),
@@ -195,28 +196,6 @@ function renderServers(servers, selectedId, list = elements.serverList) {
     list.append(row);
   }
 }
-
-function renderRunningProcesses(processes) {
-  const list = document.getElementById('runningProcessList');
-  list.replaceChildren();
-  const query = document.getElementById('processSearch').value.trim().toLowerCase();
-  const visible = processes.filter((item) => !query || item.processName.toLowerCase().includes(query));
-  if (!visible.length) { list.append(textNode('span', 'helper', 'Запущенные процессы не найдены.')); return; }
-  for (const process of visible) {
-    const row = textNode('button', 'running-process-row', '');
-    row.type = 'button';
-    row.append(textNode('strong', '', process.processName));
-    row.append(textNode('span', '', `PID ${process.pid}`));
-    row.addEventListener('click', () => run(async () => {
-      const result = await window.temple.addProcess(process);
-      document.getElementById('runningProcesses').hidden = true;
-      return result;
-    }));
-    list.append(row);
-  }
-}
-
-let runningProcesses = [];
 
 function renderHomeServers() {
   if (!currentState) return;
@@ -452,6 +431,7 @@ function render(state) {
   elements.warningBanner.hidden = !state.warning;
   renderRetryCountdown();
   elements.cancelReconnectButton.hidden = !state.recovering;
+  elements.restoreBackupButton.hidden = !(state.storageReadOnly && state.storageBackupAvailable);
   elements.errorBanner.hidden = !state.error;
   elements.errorBanner.textContent = state.error || '';
   const pingRefreshing = pingRequestInFlight || state.servers.some((server) => server.latencyStatus === 'measuring');
@@ -504,16 +484,7 @@ document.addEventListener('keydown', (event) => {
   }
 });
 document.getElementById('addAppButton').addEventListener('click', () => run(() => window.temple.addApplications()));
-document.getElementById('listProcessesButton').addEventListener('click', async () => {
-  const panel = document.getElementById('runningProcesses');
-  panel.hidden = false;
-  const list = document.getElementById('runningProcessList');
-  list.replaceChildren(textNode('span', 'helper', 'Загружаем список…'));
-  try { runningProcesses = await window.temple.listRunningProcesses(); renderRunningProcesses(runningProcesses); }
-  catch (error) { list.replaceChildren(textNode('span', 'helper', error.message || 'Не удалось получить список процессов.')); }
-});
-document.getElementById('closeProcessesButton').addEventListener('click', () => { document.getElementById('runningProcesses').hidden = true; });
-document.getElementById('processSearch').addEventListener('input', () => renderRunningProcesses(runningProcesses));
+document.getElementById('listProcessesButton').addEventListener('click', () => run(() => window.temple.openProcessPicker()));
 document.getElementById('siteExceptionForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const input = document.getElementById('siteExceptionInput');
@@ -572,6 +543,7 @@ elements.powerButton.addEventListener('click', async () => {
   }
 });
 document.getElementById('cancelReconnectButton').addEventListener('click', () => run(() => window.temple.cancelRecovery()));
+elements.restoreBackupButton.addEventListener('click', () => run(() => window.temple.restoreSettingsBackup()));
 document.getElementById('openLogsButton').addEventListener('click', () => window.temple.openLogs());
 document.getElementById('exportLogsButton').addEventListener('click', async () => {
   try { await window.temple.exportLogs(); }

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { decodeSubscriptionBody, downloadSubscription, isSupportedTransport, parseSubscription, parseVlessUri } = require('../src/subscription');
+const { resolveServer } = require('../src/server-probe');
 
 const REALITY_KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const GRPC_KEY = 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
@@ -71,6 +72,13 @@ test('rejects a malformed REALITY public key', () => {
 test('rejects provider placeholders that point to loopback', () => {
   const placeholder = REALITY.replace('example.com', '127.0.0.1');
   assert.throws(() => parseVlessUri(placeholder), /служебную заглушку/i);
+});
+
+test('VLESS IPv6 literals bypass DNS and IPv6 loopback is rejected', async () => {
+  const server = parseVlessUri('vless://11111111-1111-4111-8111-111111111111@[2001:db8::1]:443?security=tls');
+  assert.equal(server.host, '2001:db8::1');
+  assert.equal((await resolveServer(server, () => { throw Error('DNS must not be used'); })), server);
+  assert.throws(() => parseVlessUri('vless://11111111-1111-4111-8111-111111111111@[::1]:443?security=tls'), /служебную заглушку/i);
 });
 
 test('parses gRPC transport', () => {

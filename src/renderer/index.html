@@ -27,7 +27,7 @@
           <span>◆</span>
           <p>Ключ подписки хранится зашифрованно средствами Windows.</p>
         </div>
-        <div class="version">Версия 0.14.1</div>
+        <div class="version">Версия 0.14.2</div>
       </aside>
 
       <main>
@@ -94,11 +94,6 @@
                 <div class="empty-icon">＋</div>
                 <strong id="emptyAppsTitle">Приложения не добавлены</strong>
                 <span id="emptyAppsText">Нажмите «Добавить» и выберите EXE-файл.</span>
-              </div>
-              <div id="runningProcesses" class="running-processes" hidden>
-                <div class="running-processes-heading"><strong>Запущенные процессы</strong><button id="closeProcessesButton" class="icon-button" type="button" aria-label="Закрыть">×</button></div>
-                <input id="processSearch" type="search" placeholder="Поиск процесса, например chrome.exe" autocomplete="off" />
-                <div id="runningProcessList" class="running-process-list"></div>
               </div>
             </section>
 
@@ -223,6 +218,7 @@
         <div id="warningBanner" class="warning-banner" role="status" aria-live="polite" hidden>
           <span id="warningText"></span>
           <button id="cancelReconnectButton" class="warning-action" type="button">Остановить</button>
+          <button id="restoreBackupButton" class="warning-action" type="button" hidden>Восстановить настройки</button>
         </div>
         <div id="errorBanner" class="error-banner" role="alert" hidden></div>
       </main>

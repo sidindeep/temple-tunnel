@@ -13,7 +13,9 @@ Run commands from the project root. Sources: README.md and package.json.
 | Windows NSIS installer | `pnpm dist` |
 | Build network guard | `pnpm run build:guard` |
 
-Build output: `dist/`. The source packaging assets are in `build/`.
+Windows build output: `artifacts/windows/`. Android APKs are built under
+`android/app/build/outputs/apk/` and copied to `artifacts/android/` for release.
+Diagnostic output belongs in `diagnostics/`. The source packaging assets are in `build/`.
 
 ## Smoke check
 

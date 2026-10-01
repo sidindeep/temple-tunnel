@@ -47,7 +47,8 @@ function customRules(settings, dns = false) {
   const normalized = normalizeRouting(settings);
   const rules = [];
   for (const action of ['block', 'proxy', 'direct']) {
-    const domains = normalized[action].filter(item => !item.includes('/'));
+    const domains = [...new Set(normalized[action].filter(item => !item.includes('/')).flatMap(item =>
+      action === 'direct' && item.startsWith('www.') ? [item.slice(4), item] : [item]))];
     const cidrs = normalized[action].filter(item => item.includes('/'));
     const destination = action === 'block' ? { action: 'reject' }
       : dns ? { action: 'route', server: `dns-${action}` } : { action: 'route', outbound: action };

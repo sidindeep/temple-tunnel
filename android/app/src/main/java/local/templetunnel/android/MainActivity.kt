@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import local.templetunnel.android.data.RoutingMode
 import local.templetunnel.android.vpn.ConnectionPhase
+import local.templetunnel.android.vpn.DiagnosticLog
 import local.templetunnel.android.vpn.VpnState
 
 class MainActivity : ComponentActivity() {
@@ -50,13 +51,21 @@ class MainActivity : ComponentActivity() {
     var tab by remember { mutableIntStateOf(0) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result -> if (result.resultCode == Activity.RESULT_OK) model.startVpn() }
     val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val exportLog = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        uri?.let { context.contentResolver.openOutputStream(it)?.use { stream ->
+            stream.write(DiagnosticLog.exportText().toByteArray(Charsets.UTF_8))
+        } }
+    }
     LaunchedEffect(Unit) { if (Build.VERSION.SDK_INT >= 33) notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }
+    LaunchedEffect(vpn.phase) { if (vpn.phase == ConnectionPhase.CONNECTED) model.refreshState() }
 
     Scaffold(
         topBar = { TopAppBar(title = { Column { Text("Temple Tunnel", fontWeight = FontWeight.Bold); Text(vpn.message, style = MaterialTheme.typography.labelSmall) } }) },
         bottomBar = {
             NavigationBar {
-                listOf(Triple("Главная", Icons.Default.Home, 0), Triple("Приложения", Icons.Default.Apps, 1), Triple("Настройки", Icons.Default.Settings, 2)).forEach { (title, icon, index) ->
+                listOf(Triple("Главная", Icons.Default.Home, 0), Triple("Приложения", Icons.Default.Apps, 1),
+                    Triple("Настройки", Icons.Default.Settings, 2), Triple("Журнал", Icons.Default.Article, 3)).forEach { (title, icon, index) ->
                     NavigationBarItem(selected = tab == index, onClick = { tab = index }, icon = { Icon(icon, title) }, label = { Text(title) })
                 }
             }
@@ -70,7 +79,8 @@ class MainActivity : ComponentActivity() {
                     if (prepare == null) model.startVpn() else permission.launch(prepare)
                 }
                 1 -> AppsScreen(ui, model)
-                else -> SettingsScreen(ui, model)
+                2 -> SettingsScreen(ui, model)
+                else -> DiagnosticsScreen { exportLog.launch("temple-tunnel-log.txt") }
             }
             if (ui.busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
         }
@@ -148,7 +158,7 @@ class MainActivity : ComponentActivity() {
             OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("Название") }, singleLine = true)
             OutlinedTextField(source, { source = it }, Modifier.fillMaxWidth(), label = { Text("HTTPS-ссылка или VLESS / Hysteria 2") }, minLines = 2, visualTransformation = PasswordVisualTransformation())
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button({ model.importSubscription(name, source); source = "" }, enabled = source.isNotBlank(), modifier = Modifier.weight(1f)) { Text("Добавить") }
+                Button({ model.importSubscription(name, source) }, enabled = source.isNotBlank(), modifier = Modifier.weight(1f)) { Text("Добавить") }
                 OutlinedButton(model::refreshSubscription, enabled = ui.activeSubscription != null, modifier = Modifier.weight(1f)) { Text("Обновить") }
             }
         }
@@ -166,4 +176,17 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun SettingSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text(label, Modifier.weight(1f)); Switch(checked, onChange) }
+}
+
+@Composable private fun DiagnosticsScreen(export: () -> Unit) {
+    val entries by DiagnosticLog.entries.collectAsStateWithLifecycle()
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Text("Этапы подключения", style = MaterialTheme.typography.titleLarge)
+        Text("Журнал хранит только категории событий. Ссылки подписок и ключи не записываются.", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(export, Modifier.fillMaxWidth()) { Icon(Icons.Default.FileDownload, null); Spacer(Modifier.width(8.dp)); Text("Экспорт журнала") }
+        LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(entries.asReversed()) { Text(it, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
 }

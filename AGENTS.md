@@ -57,6 +57,9 @@ Temple Tunnel is a Windows Electron client for VLESS subscriptions and per-app t
   and one-off probes belong in documented project locations.
   `tools/project-memory/` holds compact implementation-driving knowledge and
   evidence references, not bulk artifacts or a replacement for source/tests.
+- During meaningful behavior or architecture work, keep scoped code, tests,
+  affected docs, and focused project-memory contracts aligned before the
+  implementation task is complete.
 - Do not revert user changes without an explicit request. Ask before destructive
   operations, broad formatting churn, dependency replacement, data migration,
   public contract changes, or unrelated expansion.
@@ -84,7 +87,7 @@ files are compatibility indexes only and contain no operational rules.
 
 ## Project Memory And Working Areas
 
-- Source: `src/`; tests: `test/`; outputs/evidence/build artifacts: `dist/`, `artifacts/` (ignored); packaging source assets: `build/`.
+- Source: `src/`; tests: `test/`; build artifacts: `artifacts/` (ignored); diagnostic evidence: `diagnostics/` (ignored); packaging source assets: `build/`.
 - Summaries: `tools/summary/`; durable project knowledge:
   `tools/project-memory/`; reusable tooling: `tools/`.
 - Put product behavior, business rules, workflow contracts, architecture

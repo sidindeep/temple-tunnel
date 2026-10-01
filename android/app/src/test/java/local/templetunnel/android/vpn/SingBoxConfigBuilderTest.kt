@@ -29,6 +29,7 @@ class SingBoxConfigBuilderTest {
         val rules = json.getJSONObject("route").getJSONArray("rules").toString()
         assertTrue(rules.contains("geoip-ru"))
         assertTrue(rules.contains("ip_version"))
+        assertTrue(json.getJSONArray("inbounds").getJSONObject(0).getJSONArray("address").toString().contains("fd7a:7465:6d70::1/126"))
     }
 
     @Test fun xhttpRequiresCompatibleCoreBuild() {

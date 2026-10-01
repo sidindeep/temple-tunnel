@@ -1,5 +1,5 @@
 param(
-  [string]$SourceDirectory = (Join-Path $PSScriptRoot '..\dist\win-unpacked'),
+  [string]$SourceDirectory = (Join-Path $PSScriptRoot '..\artifacts\windows\win-unpacked'),
   [string]$InstallDirectory = (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\Temple Tunnel'),
   [switch]$NoLaunch
 )

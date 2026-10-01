@@ -19,7 +19,9 @@ const {spawn}=require('node:child_process'),{once}=require('node:events'),{setTi
    }
    row.elapsedMs=Date.now()-started;row.logs=logs;
   }finally{if(child.exitCode===null){const exited=once(child,'exit');child.kill();await exited;}}
-  results.push(row);await fs.writeFile(path.join(__dirname,`../artifacts/tun-startup-measurements${unique?'-unique':''}.json`),JSON.stringify(results,null,2));
+  const output=path.join(__dirname,`../diagnostics/runs/tun-startup-measurements${unique?'-unique':''}.json`);
+  await fs.mkdir(path.dirname(output),{recursive:true});
+  results.push(row);await fs.writeFile(output,JSON.stringify(results,null,2));
  }
  }finally{await fs.rm(folder,{recursive:true,force:true});}
 })().catch(()=>process.exitCode=1);

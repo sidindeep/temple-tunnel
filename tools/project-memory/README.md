@@ -77,6 +77,19 @@ Split documents by meaning. Keep feature algorithms, business logic,
 architecture contracts, and implementation mapping searchable as separate
 focused files instead of one giant document.
 
+Keep a short link for each active specification in this README, or point to the
+project's canonical spec index. When a spec is added, renamed, moved, or
+retired, update that index in the same change and check its relative links.
+Label implemented, planned, and historical behavior in specs when they could
+be confused. For current-implementation claims, record the last check date and
+source or test paths; dates alone do not prove the claim.
+
+Keep specs concise and current. Revise the relevant contract when behavior
+changes; do not append a transcript of every task. Link to source, tests, docs,
+and evidence rather than copying their full contents here. Generated SQLite or
+vector indexes may help retrieval as the project grows, but the reviewable
+contracts remain focused Markdown files.
+
 Keep the current technology stack in project documentation. For compatibility,
 GI-enabled projects may keep the stack inventory at:
 

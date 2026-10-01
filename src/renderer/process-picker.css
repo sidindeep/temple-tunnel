@@ -1,0 +1,24 @@
+:root { color-scheme: dark; font-family: "Segoe UI", Inter, sans-serif; }
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 22px; overflow: hidden; background: #171a20; color: #f3f5f7; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid #a3efa9; outline-offset: 2px; }
+button:disabled { cursor: wait; opacity: .55; }
+header, .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+h1 { margin: 0 0 5px; font-size: 20px; }
+header p, footer { margin: 0; color: #a6afbb; font-size: 12px; }
+.secondary { flex: 0 0 auto; padding: 9px 12px; border: 1px solid #414852; border-radius: 9px; background: #252a32; color: #e6e9ed; }
+.secondary:hover { background: #303640; }
+input { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid #46505b; border-radius: 9px; background: #101318; color: #f3f5f7; }
+#status { min-height: 18px; margin: 0; color: #a6afbb; font-size: 12px; }
+#status.error { color: #ff8c91; }
+#processList { flex: 1; min-height: 0; overflow-y: auto; border: 1px solid #343a44; border-radius: 10px; background: #111419; }
+.process-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; border: 0; border-bottom: 1px solid #292e37; background: transparent; color: #f3f5f7; text-align: left; }
+.process-row:last-child { border-bottom: 0; }
+.process-row:hover { background: #26342a; }
+.process-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.process-row small { flex: 0 0 auto; color: #a6afbb; }
+.empty { padding: 18px 14px; color: #a6afbb; font-size: 13px; }
+footer { line-height: 1.4; }

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self';" />
+    <title>Выбор запущенного процесса</title>
+    <link rel="stylesheet" href="process-picker.css" />
+    <script src="process-picker.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Выберите процесс</h1>
+        <p>Выбранное приложение будет добавлено в текущий список.</p>
+      </div>
+      <button id="closeButton" class="secondary" type="button">Закрыть</button>
+    </header>
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Поиск, например chrome.exe" aria-label="Поиск процесса" autocomplete="off" />
+      <button id="refreshButton" class="secondary" type="button">Обновить</button>
+    </div>
+    <p id="status" role="status">Загружаем список процессов…</p>
+    <main id="processList" aria-label="Запущенные процессы"></main>
+    <footer>Процессы с одинаковым именем показаны один раз. Для точного пути используйте «EXE-файл».</footer>
+  </body>
+</html>

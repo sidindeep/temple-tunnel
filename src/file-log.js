@@ -34,7 +34,8 @@ async function createFileLog(directory, { protect, unprotect, maxBytes = 5 * 102
     for (const name of files) {
       try {
         const stat = await fs.stat(name);
-        if (Math.min(stat.birthtimeMs, stat.mtimeMs) < Date.now() - days * 86400000) await fs.rm(name);
+        // Windows can retain an old creation time when a file is replaced. Keep active logs by last write.
+        if (stat.mtimeMs < Date.now() - days * 86400000) await fs.rm(name);
       }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
     }

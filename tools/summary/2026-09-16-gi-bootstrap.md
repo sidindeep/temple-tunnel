@@ -23,4 +23,4 @@ No adapter is enabled. Continue with the user's next concrete project task.
 
 ## Build and launch follow-up
 
-Built version 0.14.1 with pnpm run pack after frozen dependency installation. Output: dist/win-unpacked/Temple Tunnel.exe. Tests: 160/161 initial pass; Xray readiness test passed on isolated retry. Logs: artifacts/build-tests.log, artifacts/build-xray-recheck.log, artifacts/build-pack.log (ignored). Launched packaged app; verified responding process and Temple Tunnel window. No installer generated and no VPN connection manually initiated.
+Built version 0.14.1 with pnpm run pack after frozen dependency installation. Output: dist/win-unpacked/Temple Tunnel.exe. Tests: 160/161 initial pass; Xray readiness test passed on isolated retry. Logs: diagnostics/runs/build-tests.log, diagnostics/runs/build-xray-recheck.log, diagnostics/runs/build-pack.log (ignored). Launched packaged app; verified responding process and Temple Tunnel window. No installer generated and no VPN connection manually initiated.

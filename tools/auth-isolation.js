@@ -10,7 +10,8 @@ const rows=[],children=new Set();
 const official=process.argv.includes('--official');
 const cooldown=process.argv.includes('--cooldown');
 const graceful=process.argv.includes('--graceful');
-const output=path.join(__dirname,`../artifacts/auth-isolation-${graceful?'graceful':official?'official':'physical'}${cooldown?'-cooldown':''}.json`);
+const output=path.join(__dirname,`../diagnostics/runs/auth-isolation-${graceful?'graceful':official?'official':'physical'}${cooldown?'-cooldown':''}.json`);
+fs.mkdirSync(path.dirname(output),{recursive:true});
 const save=()=>{for(let n=0;;n++){try{fs.writeFileSync(output,JSON.stringify(rows,null,2));return;}catch(error){if(error.code!=='EBUSY'||n>=10)throw error;Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,100);}}};
 async function port(){return new Promise(resolve=>{const s=net.createServer();s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>resolve(p));});});}
 async function run(server, label, parallel, count){

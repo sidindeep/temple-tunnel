@@ -39,6 +39,21 @@ test('old files expire and tampered entries are not decrypted', async t => {
  const reopened = await createFileLog(dir, codec);
  assert.doesNotMatch(await reopened.exportText(), /first/);
 });
+test('recent writes survive an old Windows creation timestamp', async t => {
+ const {dir,log}=await fixture(t);
+ log.write('before'); await log.flush();
+ const file=path.join(dir,'temple-tunnel.enc');
+ const originalStat=fs.stat;
+ fs.stat=async (name,...args) => {
+  const stat=await originalStat(name,...args);
+  return name === file ? {...stat,birthtimeMs:Date.now()-8*86400000} : stat;
+ };
+ try {
+  log.write('after'); await log.flush();
+  assert.match(await log.exportText(), /before/);
+  assert.match(await log.exportText(), /after/);
+ } finally { fs.stat=originalStat; }
+});
 test('no plaintext fallback when Windows key protection fails', async t => {
  const dir = await fs.mkdtemp(path.join(os.tmpdir(),'temple-log-test-'));
  t.after(()=>fs.rm(dir,{recursive:true,force:true}));

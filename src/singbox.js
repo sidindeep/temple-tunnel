@@ -145,6 +145,7 @@ function buildDns({ mode, applications, useRussianBypass, customRouting, dnsPres
     ],
     rules,
     final: mode === 'full' || mode === 'bypass' ? 'dns-proxy' : 'dns-direct',
+    reverse_mapping: true,
     strategy: ipv6Policy === 'block' ? 'ipv4_only' : 'prefer_ipv4'
   };
 }

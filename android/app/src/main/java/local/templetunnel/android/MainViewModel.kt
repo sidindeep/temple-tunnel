@@ -14,6 +14,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import local.templetunnel.android.data.*
 import local.templetunnel.android.vpn.TempleVpnService
+import local.templetunnel.android.vpn.ConnectionPhase
+import local.templetunnel.android.vpn.VpnState
 import java.net.InetSocketAddress
 import java.net.Socket
 
@@ -35,7 +37,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init { loadInstalledApps() }
 
     fun importSubscription(name: String, source: String) = work {
-        val subscription = repository.import(name, source)
+        val subscription = withContext(Dispatchers.IO) { repository.import(name, source) }
         mutate { state ->
             state.copy(subscriptions = state.subscriptions + subscription,
                 settings = state.settings.copy(activeSubscriptionId = subscription.id, selectedServerId = subscription.servers.firstOrNull()?.id))
@@ -45,16 +47,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshSubscription() = work {
         val active = _ui.value.activeSubscription ?: error("Нет активной подписки")
-        val refreshed = repository.refresh(active)
-        mutate { state -> state.copy(subscriptions = state.subscriptions.map { if (it.id == active.id) refreshed else it }) }
+        val refreshed = withContext(Dispatchers.IO) { repository.refresh(active) }
+        mutate { state -> state.copy(
+            subscriptions = state.subscriptions.map { if (it.id == active.id) refreshed else it },
+            settings = state.settings.copy(selectedServerId = state.settings.selectedServerId
+                ?.takeIf { id -> refreshed.servers.any { it.id == id } } ?: refreshed.servers.firstOrNull()?.id),
+        ) }
         "Подписка обновлена"
     }
 
     fun deleteSubscription(id: String) {
         mutate { state ->
             val remaining = state.subscriptions.filterNot { it.id == id }
-            val active = remaining.firstOrNull()
-            state.copy(subscriptions = remaining, settings = state.settings.copy(activeSubscriptionId = active?.id, selectedServerId = active?.servers?.firstOrNull()?.id))
+            val active = remaining.firstOrNull { it.id == state.settings.activeSubscriptionId } ?: remaining.firstOrNull()
+            val selected = if (active?.id == state.settings.activeSubscriptionId) state.settings.selectedServerId else active?.servers?.firstOrNull()?.id
+            state.copy(subscriptions = remaining, settings = state.settings.copy(activeSubscriptionId = active?.id, selectedServerId = selected))
         }
     }
     fun selectSubscription(id: String) = mutate { state ->
@@ -74,20 +81,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         state.copy(settings = state.settings.copy(customProxy = routeLines(proxy), customDirect = routeLines(direct), customBlock = routeLines(block)))
     }
     fun clearMessage() { _ui.value = _ui.value.copy(message = null) }
+    fun refreshState() { _ui.value = _ui.value.copy(snapshot = repository.load()) }
 
     fun measureServers() = work {
         val active = _ui.value.activeSubscription ?: error("Нет активной подписки")
         val measured = withContext(Dispatchers.IO) {
             active.servers.map { server ->
                 val started = System.nanoTime()
-                val latency = runCatching { Socket().use { it.connect(InetSocketAddress(server.host, server.port), 4_000) }; (System.nanoTime() - started) / 1_000_000 }.getOrNull()
+                val latency = if (server.protocol == "hysteria2") null else runCatching {
+                    Socket().use { it.connect(InetSocketAddress(server.host, server.port), 4_000) }
+                    (System.nanoTime() - started) / 1_000_000
+                }.getOrNull()
                 server.copy(latencyMs = latency)
             }
         }
         val best = measured.filter { it.latencyMs != null }.minByOrNull { it.latencyMs!! }
         mutate { state -> state.copy(subscriptions = state.subscriptions.map { if (it.id == active.id) it.copy(servers = measured) else it },
             settings = state.settings.copy(selectedServerId = if (state.settings.automaticServer) best?.id ?: state.settings.selectedServerId else state.settings.selectedServerId)) }
-        if (best != null) "Лучший сервер: ${best.name}, ${best.latencyMs} мс" else "Доступные серверы не найдены"
+        if (best != null) "TCP доступен: ${best.name}, ${best.latencyMs} мс. VPN проверяется при подключении."
+        else "TCP серверы не ответили; Hysteria 2 проверяется при подключении"
     }
 
     fun startVpn() {
@@ -108,9 +120,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     private fun mutate(block: (AppSnapshot) -> AppSnapshot) {
-        val updated = block(_ui.value.snapshot)
+        val previous = _ui.value.snapshot
+        val updated = block(previous)
         repository.save(updated)
         _ui.value = _ui.value.copy(snapshot = updated)
+        if (VpnState.status.value.phase in setOf(ConnectionPhase.CONNECTED, ConnectionPhase.CONNECTING) && requiresReconnect(previous, updated)) {
+            val app = getApplication<Application>()
+            if (updated.subscriptions.isEmpty()) stopVpn()
+            else app.startService(Intent(app, TempleVpnService::class.java).setAction(TempleVpnService.ACTION_RECONNECT))
+        }
+    }
+    private fun requiresReconnect(old: AppSnapshot, next: AppSnapshot): Boolean {
+        val before = old.settings
+        val after = next.settings
+        if (before.activeSubscriptionId != after.activeSubscriptionId || before.selectedServerId != after.selectedServerId ||
+            before.routingMode != after.routingMode || before.selectedPackages != after.selectedPackages ||
+            before.russianSitesViaVpn != after.russianSitesViaVpn || before.ipv6Enabled != after.ipv6Enabled ||
+            before.customProxy != after.customProxy || before.customDirect != after.customDirect || before.customBlock != after.customBlock) return true
+        fun activeServer(state: AppSnapshot) = state.subscriptions.firstOrNull { it.id == state.settings.activeSubscriptionId }
+            ?.servers?.firstOrNull { it.id == state.settings.selectedServerId }?.copy(latencyMs = null)
+        return activeServer(old) != activeServer(next)
     }
     private fun loadInstalledApps() = viewModelScope.launch(Dispatchers.IO) {
         val pm = getApplication<Application>().packageManager

@@ -14,7 +14,8 @@ syncFs.copyFileSync(path.join(data,'Local State'),path.join(scratch,'Local State
 const report={method:'Local mixed proxies, real saved profiles, TLS verification; no system TUN or saved preference changes',groups:[]};
 const boundInterface=process.env.TEMPLE_BENCH_INTERFACE;
 report.backendSocketsBoundToPhysicalInterface=Boolean(boundInterface);
-const output=path.join(__dirname,`../artifacts/connection-benchmark-groups${boundInterface?'-physical':''}.json`);
+const output=path.join(__dirname,`../diagnostics/runs/connection-benchmark-groups${boundInterface?'-physical':''}.json`);
+syncFs.mkdirSync(path.dirname(output),{recursive:true});
 const write=()=>fs.writeFile(output,JSON.stringify(report,null,2));
 let sequence=0;
 async function port(){const s=net.createServer();s.listen(0,'127.0.0.1');await once(s,'listening');const p=s.address().port;await new Promise(r=>s.close(r));return p;}

@@ -19,7 +19,9 @@ app.whenReady().then(async()=>{
     const child=spawn(...args);child.stderr.on('data',d=>{const text=String(d);for(const match of text.matchAll(/auth[^\n]*?\b(401|403|404|429|503)\b/gi))authCodes.push(Number(match[1]));});return child;
    }});
    rows.push({candidate:candidate+1,pauseMs:pause,status:result.status,reason:result.reason,ms:result.ms,authCodes});
-   fs.writeFileSync(path.join(__dirname,'../artifacts/auth-reconnect-check.json'),JSON.stringify(rows,null,2));
+   const output=path.join(__dirname,'../diagnostics/runs/auth-reconnect-check.json');
+   fs.mkdirSync(path.dirname(output),{recursive:true});
+   fs.writeFileSync(output,JSON.stringify(rows,null,2));
   }
  }finally{try{fs.rmSync(scratch,{recursive:true,force:true});}catch{}app.exit();}
 });

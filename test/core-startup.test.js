@@ -25,7 +25,7 @@ function fixture(readyAt,abortedAt=Infinity){
  const context=vm.createContext({Date:class extends Date{static now(){return now;}},connectionError,connectionErrorMessages,
   setTimeout:(callback,ms)=>{now+=ms;queueMicrotask(callback);},
   net:{createConnection:()=>{const socket=new EventEmitter();socket.setTimeout=()=>{};socket.destroy=()=>{};
-   queueMicrotask(()=>socket.emit(now>=readyAt?'connect':'error',Error('Not ready')));return socket;}},
+   queueMicrotask(()=>socket.emit(now>=readyAt?'connect':'error',Object.assign(Error('private.example token=secret'),{code:'ECONNREFUSED'})));return socket;}},
   child:{exitCode:null},signal:{get aborted(){return now>=abortedAt;}},onSlow:()=>slow++});
  vm.runInContext(source.slice(source.indexOf('async function waitForLocalPort('),source.indexOf('function validateCoreConfig(')),context);
  return {context,now:()=>now,slow:()=>slow};
@@ -36,8 +36,23 @@ test('slow Windows startup is allowed past five seconds and reports the local ph
 });
 test('core startup timeout is a local failure, never a server/network failure',async()=>{
  const f=fixture(Infinity);
+ f.context.child.startupLineCounts={stdout:2,stderr:1};
+ f.context.child.startupLastDiagnostic='Windows задерживает открытие VPN-адаптера.';
  await assert.rejects(f.context.waitForLocalPort(f.context.child,12345,20000,'sing-box',f.context.signal),error=>{
-  assert.equal(error.code,'CORE_READY_TIMEOUT');assert.equal(classifyConnectionError(error),'local');return true;
+  assert.equal(error.code,'CORE_READY_TIMEOUT');assert.equal(classifyConnectionError(error),'local');
+  assert.match(error.diagnostic,/порт отклоняет соединение/);
+  assert.match(error.diagnostic,/stdout 2, stderr 1/);
+  assert.match(error.diagnostic,/задерживает открытие VPN-адаптера/);
+  assert.doesNotMatch(error.diagnostic,/private\.example|secret|12345/);
+  return true;
+ });
+});
+test('silent core timeout reports missing diagnostic evidence',async()=>{
+ const f=fixture(Infinity);
+ await assert.rejects(f.context.waitForLocalPort(f.context.child,12345,8000,'sing-box',f.context.signal),error=>{
+  assert.match(error.diagnostic,/stdout 0, stderr 0/);
+  assert.match(error.diagnostic,/распознанных сообщений от ядра нет/);
+  return true;
  });
 });
 test('manual cancellation stops a delayed Windows startup',async()=>{
@@ -61,4 +76,15 @@ test('network permission errors cannot poison a running TUN or combine across lo
  context.readDiagnosticCoreLog(child,'sing-box',Buffer.from('FATAL start service: initialize tun: access is denied\n'));
  assert.equal(child.localFailure,true);
  assert.equal(isLocalCoreFailure('configure tun interface: create adapter: Cannot create a file when that file already exists.'),true);
+});
+test('core output tracking stores only counts and fixed diagnostic categories',()=>{
+ const logs=[];
+ const context=vm.createContext({Date,coreDiagnostic,isLocalCoreFailure,log:message=>logs.push(message)});
+ vm.runInContext(source.slice(source.indexOf('function readDiagnosticCoreLog('),source.indexOf('function corePath(')),context);
+ const child={};
+ context.readDiagnosticCoreLog(child,'sing-box','ERROR open interface take too much time to finish! private.example token=secret','stderr');
+ assert.equal(child.startupLineCounts.stderr,1);
+ assert.equal(child.startupLineCounts.stdout,0);
+ assert.match(child.startupLastDiagnostic,/Windows задерживает/);
+ assert.doesNotMatch(JSON.stringify(child.startupLastDiagnostic)+logs.join(' '),/private\.example|secret/);
 });

@@ -1,6 +1,6 @@
 {
   "name": "temple-tunnel",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "description": "Windows VLESS client with simple per-app tunneling",
   "main": "src/main.js",
   "author": "Local build",
@@ -10,9 +10,13 @@
     "test": "node --test",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis",
-    "build:guard": "cmd /c tools/build-network-guard.cmd"
+    "build:guard": ".\\tools\\build-network-guard.cmd",
+    "build:core-host": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\tools\\build-core-host.ps1"
   },
   "build": {
+    "directories": {
+      "output": "artifacts/windows"
+    },
     "appId": "local.templetunnel.app",
     "productName": "Temple Tunnel",
     "artifactName": "Temple-Tunnel-Setup-${version}.${ext}",

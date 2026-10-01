@@ -13,7 +13,7 @@ Evidence: package.json, README.md and the src/ directory listing.
 | QR import | jsqr 1.4.0 | package.json |
 | Development QR tooling | qrcode 1.5.4 | package.json |
 | Packages | pnpm and pnpm-lock.yaml | README.md, lockfile presence |
-| Packaging | electron-builder ^26.15.3, Windows NSIS | package.json |
+| Packaging | electron-builder ^26.15.3, Windows NSIS; output in artifacts/windows/ | package.json |
 | Tests | Node.js built-in test runner | package.json scripts.test |
 
 Versions above are manifest ranges, not verified installed runtime versions.

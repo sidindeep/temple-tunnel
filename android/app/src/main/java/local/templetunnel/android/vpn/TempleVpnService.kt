@@ -19,23 +19,33 @@ import local.templetunnel.android.MainActivity
 import local.templetunnel.android.R
 import local.templetunnel.android.TempleApplication
 import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.NetworkInterface as JavaNetworkInterface
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 import java.security.KeyStore
 import java.security.cert.X509Certificate
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import android.util.Base64
 
 class TempleVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     companion object {
         const val ACTION_CONNECT = "local.templetunnel.CONNECT"
         const val ACTION_DISCONNECT = "local.templetunnel.DISCONNECT"
+        const val ACTION_RECONNECT = "local.templetunnel.RECONNECT"
         private const val CHANNEL = "temple-vpn"
         private const val NOTIFICATION_ID = 41
     }
 
-    private var commandServer: CommandServer? = null
-    private var tun: ParcelFileDescriptor? = null
+    @Volatile private var commandServer: CommandServer? = null
+    @Volatile private var tun: ParcelFileDescriptor? = null
     private var monitor: InterfaceUpdateListener? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val operation = AtomicInteger()
+    private val recoveryPending = AtomicBoolean()
+    private val coreLock = Any()
+    @Volatile private var activeHealthPort = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -46,45 +56,123 @@ class TempleVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         if (intent?.action == ACTION_DISCONNECT) {
             stopTunnel(); return START_NOT_STICKY
         }
+        if (intent?.action != ACTION_RECONNECT && VpnState.status.value.phase in setOf(ConnectionPhase.CONNECTING, ConnectionPhase.CONNECTED)) return START_STICKY
+        val ticket = operation.incrementAndGet()
         startForeground(NOTIFICATION_ID, notification("Подключение…"))
         VpnState.status.value = ConnectionStatus(ConnectionPhase.CONNECTING, "Подключение…")
-        Thread { runCatching { startTunnel() }.onFailure(::fail) }.start()
+        DiagnosticLog.record("Подключение запрошено")
+        Thread { runCatching { startTunnel(ticket) }.onFailure { if (ticket == operation.get()) fail(it) } }.start()
         return START_STICKY
     }
 
-    private fun startTunnel() {
+    private fun startTunnel(ticket: Int) {
         stopCore()
+        requireActive(ticket)
         val repository = (application as TempleApplication).repository
         val snapshot = repository.load()
         val subscription = snapshot.subscriptions.firstOrNull { it.id == snapshot.settings.activeSubscriptionId }
             ?: snapshot.subscriptions.firstOrNull() ?: error("Сначала добавьте подписку")
-        val server = subscription.servers.firstOrNull { it.id == snapshot.settings.selectedServerId }
-            ?: subscription.servers.firstOrNull() ?: error("В подписке нет серверов")
+        val selected = subscription.servers.firstOrNull { it.id == snapshot.settings.selectedServerId }
+        val candidates = if (snapshot.settings.automaticServer) {
+            listOfNotNull(selected) + subscription.servers.filterNot { it.id == selected?.id }
+                .sortedWith(compareBy({ it.latencyMs == null }, { it.latencyMs ?: Long.MAX_VALUE }))
+        } else listOfNotNull(selected ?: subscription.servers.firstOrNull())
+        require(candidates.isNotEmpty()) { "В подписке нет серверов" }
         val rulesDir = java.io.File(filesDir, "rules").apply { mkdirs() }
         val geoIp = copyAsset("geoip-ru.srs", rulesDir)
         val geoSite = copyAsset("geosite-category-ru.srs", rulesDir)
-
-        val healthPort = Libbox.availablePort(12_000)
-        val config = SingBoxConfigBuilder.build(server, snapshot.settings, geoIp.absolutePath, geoSite.absolutePath, healthPort)
-        Libbox.checkConfig(config)
-        commandServer = Libbox.newCommandServer(this, this).also {
-            it.startWithTemporaryPort(); it.startOrReloadService(config, null)
+        var lastFailure: Throwable? = null
+        for ((index, server) in candidates.take(3).withIndex()) {
+            requireActive(ticket)
+            if (index > 0) DiagnosticLog.record("Проверка резервного сервера ${index + 1}")
+            try {
+                val healthPort = Libbox.availablePort(12_000)
+                val config = SingBoxConfigBuilder.build(server, snapshot.settings, geoIp.absolutePath, geoSite.absolutePath, healthPort)
+                Libbox.checkConfig(config)
+                requireActive(ticket)
+                val created = Libbox.newCommandServer(this, this)
+                synchronized(coreLock) {
+                    requireActive(ticket)
+                    commandServer = created
+                }
+                created.startWithTemporaryPort()
+                created.startOrReloadService(config, null)
+                requireActive(ticket)
+                verifyTunnel(healthPort)
+                requireActive(ticket)
+                activeHealthPort = healthPort
+                if (snapshot.settings.automaticServer && server.id != snapshot.settings.selectedServerId) {
+                    val latest = repository.load()
+                    if (latest.settings.automaticServer && latest.settings.activeSubscriptionId == subscription.id) {
+                        repository.save(latest.copy(settings = latest.settings.copy(selectedServerId = server.id)))
+                    }
+                }
+                VpnState.status.value = ConnectionStatus(ConnectionPhase.CONNECTED, "Подключено: ${server.name}")
+                DiagnosticLog.record("Защищённое соединение подтверждено")
+                updateNotification("Подключено: ${server.name}")
+                return
+            } catch (error: Throwable) {
+                requireActive(ticket)
+                lastFailure = error
+                DiagnosticLog.record("Проверка кандидата завершилась ошибкой: ${error.javaClass.simpleName}")
+                stopCore()
+            }
         }
-        verifyTunnel(healthPort)
-        VpnState.status.value = ConnectionStatus(ConnectionPhase.CONNECTED, "Подключено: ${server.name}")
-        updateNotification("Подключено: ${server.name}")
+        throw IllegalStateException("Не удалось подключиться ни к одному из проверенных серверов", lastFailure)
     }
 
+    private fun requireActive(ticket: Int) { check(ticket == operation.get()) { "Подключение отменено" } }
+
     private fun verifyTunnel(port: Int) {
-        val client = Libbox.newHTTPClient()
+        val host = "www.cloudflare.com"
         try {
-            client.modernTLS(); client.trySocks5(port)
-            client.newRequest().apply {
-                setMethod("GET"); setURL("https://www.cloudflare.com/cdn-cgi/trace"); setUserAgent("TempleTunnel/0.14.1 Android")
-            }.execute()
+            Socket().use { proxy ->
+                proxy.connect(InetSocketAddress("127.0.0.1", port), 8_000)
+                proxy.soTimeout = 8_000
+                val input = proxy.getInputStream()
+                val output = proxy.getOutputStream()
+                output.write(byteArrayOf(5, 1, 0)); output.flush()
+                val greeting = ByteArray(2)
+                readFully(input, greeting)
+                check(greeting.contentEquals(byteArrayOf(5, 0))) { "Локальный SOCKS-прокси недоступен" }
+                val domain = host.toByteArray(Charsets.US_ASCII)
+                output.write(byteArrayOf(5, 1, 0, 3, domain.size.toByte()))
+                output.write(domain); output.write(byteArrayOf(1, 187.toByte())); output.flush()
+                val reply = ByteArray(4)
+                readFully(input, reply)
+                check(reply[0] == 5.toByte() && reply[1] == 0.toByte()) { "VPN-сервер отклонил проверочное соединение" }
+                val addressBytes = when (reply[3].toInt() and 0xff) {
+                    1 -> 4
+                    3 -> input.read().also { check(it in 0..255) }
+                    4 -> 16
+                    else -> error("Некорректный ответ SOCKS-прокси")
+                }
+                readFully(input, ByteArray(addressBytes + 2))
+                ((SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(proxy, host, 443, false) as SSLSocket).use { tls ->
+                    tls.soTimeout = 8_000
+                    tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
+                    tls.startHandshake()
+                    tls.outputStream.write("GET /cdn-cgi/trace HTTP/1.1\r\nHost: $host\r\nUser-Agent: TempleTunnel/0.14.1 Android\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+                    tls.outputStream.flush()
+                    val response = ByteArray(32 * 1024)
+                    val count = tls.inputStream.read(response)
+                    check(count > 0 && String(response, 0, count, Charsets.US_ASCII).startsWith("HTTP/1.1 200")) {
+                        "Проверочный HTTPS-запрос не прошёл через VPN"
+                    }
+                }
+            }
         } catch (error: Throwable) {
             throw IllegalStateException("VPN-сервер не подтвердил защищённое соединение", error)
-        } finally { client.close() }
+        }
+    }
+
+    private fun readFully(input: java.io.InputStream, bytes: ByteArray) {
+        var offset = 0
+        while (offset < bytes.size) {
+            val count = input.read(bytes, offset, bytes.size - offset)
+            check(count > 0) { "Соединение прервано" }
+            offset += count
+        }
     }
 
     private fun copyAsset(name: String, directory: java.io.File): java.io.File {
@@ -94,21 +182,32 @@ class TempleVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     private fun stopTunnel() {
+        operation.incrementAndGet()
         VpnState.status.value = ConnectionStatus(ConnectionPhase.STOPPING, "Отключение…")
-        stopCore()
-        VpnState.status.value = ConnectionStatus()
-        stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
+        DiagnosticLog.record("Ручное отключение")
+        Thread {
+            stopCore()
+            VpnState.status.value = ConnectionStatus()
+            stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
+        }.start()
     }
     private fun stopCore() {
-        runCatching { commandServer?.closeService() }; runCatching { commandServer?.close() }; commandServer = null
-        runCatching { tun?.close() }; tun = null
+        activeHealthPort = 0
+        val (server, descriptor) = synchronized(coreLock) {
+            val old = commandServer to tun
+            commandServer = null; tun = null
+            old
+        }
+        runCatching { server?.closeService() }; runCatching { server?.close() }
+        runCatching { descriptor?.close() }
     }
     private fun fail(error: Throwable) {
         stopCore(); val message = error.message ?: "Не удалось запустить VPN"
+        DiagnosticLog.record("Подключение не удалось: ${error.javaClass.simpleName}")
         VpnState.status.value = ConnectionStatus(ConnectionPhase.ERROR, message)
         updateNotification("Ошибка: $message")
     }
-    override fun onDestroy() { stopCore(); super.onDestroy() }
+    override fun onDestroy() { operation.incrementAndGet(); stopCore(); super.onDestroy() }
     override fun onRevoke() { stopTunnel() }
 
     override fun openTun(options: TunOptions): Int {
@@ -124,8 +223,9 @@ class TempleVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             options.includePackage.addPackages { builder.addAllowedApplication(it) }
             options.excludePackage.addPackages { builder.addDisallowedApplication(it) }
         }
-        tun = builder.establish() ?: error("Android отозвал разрешение VPN")
-        return tun!!.fd
+        val descriptor = builder.establish() ?: error("Android отозвал разрешение VPN")
+        synchronized(coreLock) { tun = descriptor }
+        return descriptor.fd
     }
 
     override fun autoDetectInterfaceControl(fd: Int) { protect(fd) }
@@ -143,12 +243,34 @@ class TempleVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         val cm = getSystemService(ConnectivityManager::class.java)
         networkCallback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         networkCallback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) = updateDefaultInterface(listener)
-            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) = updateDefaultInterface(listener)
-            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) = updateDefaultInterface(listener)
-            override fun onLost(network: Network) = updateDefaultInterface(listener)
+            override fun onAvailable(network: Network) { updateDefaultInterface(listener); scheduleRecoveryCheck() }
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) { updateDefaultInterface(listener); scheduleRecoveryCheck() }
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) { updateDefaultInterface(listener); scheduleRecoveryCheck() }
+            override fun onLost(network: Network) { updateDefaultInterface(listener); scheduleRecoveryCheck() }
         }.also(cm::registerDefaultNetworkCallback)
         updateDefaultInterface(listener)
+    }
+
+    private fun scheduleRecoveryCheck() {
+        if (VpnState.status.value.phase != ConnectionPhase.CONNECTED || !recoveryPending.compareAndSet(false, true)) return
+        val ticket = operation.get()
+        Thread {
+            try {
+                Thread.sleep(1_500)
+                if (ticket != operation.get() || VpnState.status.value.phase != ConnectionPhase.CONNECTED) return@Thread
+                runCatching { commandServer?.resetNetwork() }
+                val port = activeHealthPort
+                if (port == 0) return@Thread
+                try { verifyTunnel(port) } catch (_: Throwable) {
+                    if (ticket != operation.get()) return@Thread
+                    DiagnosticLog.record("Сеть изменилась; начинаем восстановление")
+                    val next = operation.incrementAndGet()
+                    VpnState.status.value = ConnectionStatus(ConnectionPhase.CONNECTING, "Восстановление соединения…")
+                    updateNotification("Восстановление соединения…")
+                    runCatching { startTunnel(next) }.onFailure { if (next == operation.get()) fail(it) }
+                }
+            } finally { recoveryPending.set(false) }
+        }.start()
     }
     override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
         if (monitor === listener) monitor = null
@@ -157,7 +279,12 @@ class TempleVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
     private fun updateDefaultInterface(listener: InterfaceUpdateListener) {
         val cm = getSystemService(ConnectivityManager::class.java)
-        val network = cm.activeNetwork ?: return
+        val network = cm.activeNetwork?.takeUnless { cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true }
+            ?: cm.allNetworks.firstOrNull { candidate ->
+                val capabilities = cm.getNetworkCapabilities(candidate)
+                capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == false &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            } ?: return
         val link = cm.getLinkProperties(network) ?: return
         val capabilities = cm.getNetworkCapabilities(network)
         listener.updateDefaultInterface(link.interfaceName.orEmpty(), JavaNetworkInterface.getByName(link.interfaceName)?.index ?: 0,
@@ -170,6 +297,7 @@ class TempleVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             val link = cm.getLinkProperties(network) ?: return@mapNotNull null
             val native = JavaNetworkInterface.getByName(link.interfaceName) ?: return@mapNotNull null
             val capabilities = cm.getNetworkCapabilities(network)
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) return@mapNotNull null
             NetworkInterface().apply {
                 name = native.name; index = native.index; mtu = runCatching { native.mtu }.getOrDefault(1500)
                 addresses = Strings(native.interfaceAddresses.map { "${it.address.hostAddress}/${it.networkPrefixLength}" })
@@ -239,4 +367,4 @@ private class Interfaces(private val values: List<NetworkInterface>) : NetworkIn
 }
 private fun RoutePrefixIterator.addAddresses(builder: VpnService.Builder) { while (hasNext()) next().also { builder.addAddress(it.address(), it.prefix()) } }
 private fun RoutePrefixIterator.addRoutes(builder: VpnService.Builder) { while (hasNext()) next().also { builder.addRoute(it.address(), it.prefix()) } }
-private fun StringIterator.addPackages(block: (String) -> Unit) { while (hasNext()) runCatching { block(next()) } }
+private fun StringIterator.addPackages(block: (String) -> Unit) { while (hasNext()) block(next()) }

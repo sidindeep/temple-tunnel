@@ -45,8 +45,8 @@ app.whenReady().then(async () => {
     const cancelRecoveryVisible = !document.getElementById('cancelReconnectButton').hidden;
     document.querySelector('[data-mode="full"]').click();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    const fullHidesApplications = document.getElementById('applicationsPanel').hidden
-      && document.getElementById('contentGrid').classList.contains('full-mode');
+    const fullExplainsProtection = document.getElementById('applicationsTitle').textContent === 'Полная защита'
+      && document.getElementById('emptyAppsTitle').textContent === 'Защита для всех приложений';
     document.querySelector('[data-mode="selected"]').click();
     await new Promise((resolve) => setTimeout(resolve, 20));
     const selectedShowsChecklist = !document.getElementById('applicationsPanel').hidden
@@ -72,7 +72,7 @@ app.whenReady().then(async () => {
     strategy.value = 'auto'; strategy.dispatchEvent(new Event('change'));
     await new Promise(resolve=>setTimeout(resolve,20));
     if (!autoDefault || !manualAfterSelection || strategy.value !== 'auto') throw Error('Connection strategy control failed');
-    const power = document.getElementById('powerButton');
+    const power = document.getElementById('homePowerButton');
     const powerStartsEnabled = !power.disabled;
     power.click();
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -81,7 +81,7 @@ app.whenReady().then(async () => {
     const powerStopsImmediately = !power.classList.contains('on');
     await new Promise((resolve) => setTimeout(resolve, 20));
     const powerDisconnected = !power.classList.contains('on') && power.getAttribute('aria-pressed') === 'false';
-    return { subscription, subscriptionList, subscriptionSwitch, subscriptionActions, subscriptionEdit, logs, home, warningVisible, cancelRecoveryVisible, fullHidesApplications, selectedShowsChecklist, bypassShowsOnlyExclusions, xhttpSupported, serverLatency, serversInSubscriptionOrder, keyboardAccessibleServers, powerStartsEnabled, powerConnected, powerStopsImmediately, powerDisconnected };
+    return { subscription, subscriptionList, subscriptionSwitch, subscriptionActions, subscriptionEdit, logs, home, warningVisible, cancelRecoveryVisible, fullExplainsProtection, selectedShowsChecklist, bypassShowsOnlyExclusions, xhttpSupported, serverLatency, serversInSubscriptionOrder, keyboardAccessibleServers, powerStartsEnabled, powerConnected, powerStopsImmediately, powerDisconnected };
   })()`);
   if (Object.values(checks).some((value) => !value)) {
     throw new Error(`UI smoke check failed: ${JSON.stringify(checks)}`);
@@ -89,7 +89,7 @@ app.whenReady().then(async () => {
   const retryUi = await window.webContents.executeJavaScript(`(async () => {
     const previous = currentState;
     render({...previous,status:'reconnecting',warning:'Рабочее соединение пока не найдено.',retryAt:Date.now()+2000});
-    const power = document.getElementById('powerButton');
+    const power = document.getElementById('homePowerButton');
     const waiting = power.classList.contains('busy') && !power.classList.contains('on')
       && power.getAttribute('aria-pressed') === 'false';
     const first = document.getElementById('warningBanner').textContent;
@@ -116,7 +116,7 @@ app.whenReady().then(async () => {
     list.firstChild.dispatchEvent(new DragEvent('drop',{bubbles:true,dataTransfer:transfer,clientY:0})); await pause();
     if (list.firstChild.dataset.subscriptionId !== before[1]) return false;
     const active = currentState.subscriptions.find(s=>s.id===currentState.activeSubscriptionId);
-    return document.getElementById('activeSubscriptionName').textContent === active.name;
+    return list.querySelector('.subscription-row.active .subscription-copy strong').textContent === active.name;
   })()`);
   if (!organizationUi) throw new Error('Subscription hiding, order or heading failed');
   window.setSize(980, 640);
@@ -141,8 +141,8 @@ app.whenReady().then(async () => {
   window.webContents.invalidate();
   await new Promise((resolve) => setTimeout(resolve, 250));
   const subscriptionImage = await window.webContents.capturePage();
-  fs.mkdirSync(path.join(__dirname, '..', 'artifacts'), { recursive: true });
-  fs.writeFileSync(path.join(__dirname, '..', 'artifacts', 'subscription-preview-0.8.0.png'), subscriptionImage.toPNG());
+  fs.mkdirSync(path.join(__dirname, '..', 'diagnostics', 'ui'), { recursive: true });
+  fs.writeFileSync(path.join(__dirname, '..', 'diagnostics', 'ui', 'subscription-preview-0.8.0.png'), subscriptionImage.toPNG());
   await window.webContents.executeJavaScript(`document.querySelector('[data-page="home"]').click()`);
   await window.webContents.executeJavaScript(`document.querySelector('[data-mode="full"]').click()`);
   await new Promise((resolve) => setTimeout(resolve, 50));
@@ -155,7 +155,7 @@ app.whenReady().then(async () => {
   })()`);
   if (!russianControlWorks) throw new Error('Russian routing control failed');
   const image = await window.webContents.capturePage();
-  fs.writeFileSync(path.join(__dirname, '..', 'artifacts', 'ui-preview.png'), image.toPNG());
+  fs.writeFileSync(path.join(__dirname, '..', 'diagnostics', 'ui', 'ui-preview.png'), image.toPNG());
   const routingWorks = await window.webContents.executeJavaScript(`(async () => {
     document.querySelector('[data-page="routing"]').click();
     if (!document.getElementById('routingPage').classList.contains('active')) return false;
@@ -189,13 +189,14 @@ app.whenReady().then(async () => {
   await window.webContents.executeJavaScript(`document.querySelector('[data-page="routing"]').click()`);
   window.webContents.invalidate();
   await new Promise(resolve => setTimeout(resolve, 250));
-  fs.writeFileSync(path.join(__dirname, '..', 'artifacts', 'routing-preview.png'), (await window.webContents.capturePage()).toPNG());
+  fs.writeFileSync(path.join(__dirname, '..', 'diagnostics', 'ui', 'routing-preview.png'), (await window.webContents.capturePage()).toPNG());
   await window.webContents.executeJavaScript(`document.getElementById('saveRoutingButton').scrollIntoView({block:'end'})`);
   await new Promise(resolve=>setTimeout(resolve,100));
-  fs.writeFileSync(path.join(__dirname, '..', 'artifacts', 'protection-preview.png'), (await window.webContents.capturePage()).toPNG());
-  fs.writeFileSync(path.join(__dirname, '..', '.cache', 'ui-smoke-result.json'), JSON.stringify({checks,routingWorks,retryUi,organizationUi,protectionUi}));
+  fs.writeFileSync(path.join(__dirname, '..', 'diagnostics', 'ui', 'protection-preview.png'), (await window.webContents.capturePage()).toPNG());
+  fs.writeFileSync(path.join(__dirname, '..', 'diagnostics', 'ui', 'ui-smoke-result.json'), JSON.stringify({checks,routingWorks,retryUi,organizationUi,protectionUi}));
   app.quit();
 }).catch(error => {
-  fs.writeFileSync(path.join(__dirname, '..', '.cache', 'ui-smoke-error.txt'), error.stack || String(error));
+  fs.mkdirSync(path.join(__dirname, '..', 'diagnostics', 'ui'), { recursive: true });
+  fs.writeFileSync(path.join(__dirname, '..', 'diagnostics', 'ui', 'ui-smoke-error.txt'), error.stack || String(error));
   app.exit(1);
 });

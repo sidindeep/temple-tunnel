@@ -83,23 +83,26 @@ function parseVlessUri(uri) {
   }
 
   const q = url.searchParams;
+  // WHATWG URL.hostname retains brackets around IPv6 literals; VPN cores and
+  // the resolver require the bare address.
+  const host = url.hostname.replace(/^\[|\]$/g, '');
   const transport = (q.get('type') || 'tcp').toLowerCase();
   const security = (q.get('security') || 'none').toLowerCase();
-  const name = safeDecode(url.hash.slice(1), `${url.hostname}:${port}`);
+  const name = safeDecode(url.hash.slice(1), `${host}:${port}`);
   const xhttpExtra = transport === 'xhttp' ? parseXhttpExtra(q.get('extra')) : undefined;
 
   const server = {
     id: crypto.createHash('sha256').update(uri).digest('hex').slice(0, 24),
     name,
     protocol: 'vless',
-    host: url.hostname,
+    host,
     port,
     uuid,
     flow: q.get('flow') || '',
     encryption: q.get('encryption') || 'none',
     security,
     transport,
-    serverName: q.get('sni') || q.get('serverName') || url.hostname,
+    serverName: q.get('sni') || q.get('serverName') || host,
     fingerprint: q.get('fp') || 'chrome',
     publicKey: q.get('pbk') || q.get('publicKey') || '',
     shortId: q.get('sid') || q.get('shortId') || '',

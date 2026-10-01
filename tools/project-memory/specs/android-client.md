@@ -1,6 +1,6 @@
 # Android client contract
 
-Last updated: 2026-09-22.
+Last updated: 2026-09-23.
 
 ## Product boundary
 
@@ -22,6 +22,8 @@ Windows safeStorage, WFP, executable paths, or Windows process matching.
    check closes the core and TUN descriptor and reports an error.
 6. Manual disconnect closes the libbox service and TUN descriptor, removes the
    foreground notification, and wins over automatic Android service restart.
+7. A network change triggers a protected HTTPS recheck; a failed recheck
+   restarts the tunnel. Automatic selection may try up to two backup servers.
 
 ## Routing invariants
 
@@ -49,6 +51,13 @@ with `with_xhttp`.
 - JVM tests cover VLESS validation, Android package filters, RU routing, IPv6
   blocking, and the explicit XHTTP guard.
 - Gradle builds and APK signature verification cover packaging integrity.
+- Android 15 emulator instrumentation calls native `Libbox.checkConfig` for
+  VLESS REALITY in full and package-filtered modes, plus Hysteria 2 in full mode.
+- Import/refresh run off the UI thread, and a failed encrypted-preference read
+  is reported rather than silently replacing user data.
+- The in-memory diagnostic log stores only predefined event messages and can
+  be exported by the user.
+- No successful live VPN session has been demonstrated without a valid profile.
 - A release decision still requires a physical-device matrix for Android 7,
   10, 13, and 15+, Wi-Fi/mobile switching, sleep/resume, Always-on, DNS/IPv6,
   each supported transport, and vendor battery restrictions.

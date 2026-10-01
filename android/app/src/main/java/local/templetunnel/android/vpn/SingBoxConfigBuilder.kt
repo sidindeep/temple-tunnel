@@ -13,7 +13,7 @@ object SingBoxConfigBuilder {
         }
         val inbound = JSONObject().apply {
             put("type", "tun"); put("tag", "tun-in"); put("interface_name", "temple-tun")
-            put("address", JSONArray(buildList { add("172.31.254.1/30"); if (settings.ipv6Enabled) add("fd7a:7465:6d70::1/126") }))
+            put("address", JSONArray(listOf("172.31.254.1/30", "fd7a:7465:6d70::1/126")))
             put("mtu", 1500); put("auto_route", true); put("strict_route", true); put("stack", "mixed")
             if (settings.routingMode == RoutingMode.SELECTED) put("include_package", JSONArray(settings.selectedPackages.toList()))
             if (settings.routingMode == RoutingMode.BYPASS) put("exclude_package", JSONArray(settings.selectedPackages.toList()))

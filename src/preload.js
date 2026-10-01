@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('temple', {
   getState: () => ipcRenderer.invoke('state:get'),
+  restoreSettingsBackup: () => ipcRenderer.invoke('storage:restore-backup'),
   setSubscription: (subscription) => ipcRenderer.invoke('subscription:set', subscription),
   updateSubscription: (subscription) => ipcRenderer.invoke('subscription:update', subscription),
   deleteSubscription: (id) => ipcRenderer.invoke('subscription:delete', id),
@@ -15,8 +16,7 @@ contextBridge.exposeInMainWorld('temple', {
   pingServers: () => ipcRenderer.invoke('servers:ping'),
   cancelRecovery: () => ipcRenderer.invoke('recovery:cancel'),
   addApplications: () => ipcRenderer.invoke('apps:add'),
-  listRunningProcesses: () => ipcRenderer.invoke('apps:list-running'),
-  addProcess: (process) => ipcRenderer.invoke('apps:add-process', process),
+  openProcessPicker: () => ipcRenderer.invoke('apps:open-process-picker'),
   removeApplication: (path) => ipcRenderer.invoke('apps:remove', path),
   toggleApplication: (application) => ipcRenderer.invoke('apps:toggle', application),
   updateSettings: (update) => ipcRenderer.invoke('settings:update', update),

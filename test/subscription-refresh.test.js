@@ -7,7 +7,8 @@ const code = source.slice(source.indexOf('async function refreshSubscription('),
 function fixture(downloaded, running = false) {
   const active = {id:'sub',source:'https://example.com',servers:[{id:'one'}],selectedServerId:'one'};
   let restarts = 0;
-  const ctx = {subscriptionUpdateInFlight:false, tunnelOperationId:0,
+  const ctx = {subscriptionUpdateInFlight:false, tunnelOperationId:0, manualDisconnectId:0,
+    manualStopSince:id=>id!==ctx.manualDisconnectId,
     state:{activeSubscriptionId:'sub',selectedServerId:'one',status:running?'connected':'disconnected'},
     activeSubscription:()=>active, subscriptionUrl:()=>active.source,
     downloadSubscription:async()=>downloaded, subscriptions:()=>[active], isTunnelActive:()=>running,
