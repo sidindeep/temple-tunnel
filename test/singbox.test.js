@@ -75,6 +75,18 @@ test('selected mode requires at least one application', () => {
   assert.throws(() => buildConfig({ server, mode: 'selected', applications: [] }), /добавьте/i);
 });
 
+test('all modes route captured upstream DNS directly while preserving domain and application policies', () => {
+  for (const mode of ['full', 'selected', 'bypass']) {
+    const config = buildConfig({ server, mode, applications: [{ processName: 'Telegram.exe' }],
+      directDns: '192.0.2.53', customRouting: { direct: ['dzen.ru'] }, healthPort: 23456 });
+    assert.deepEqual(config.dns.servers.find(item => item.tag === 'dns-direct'),
+      { type: 'udp', tag: 'dns-direct', server: '192.0.2.53', server_port: 53 });
+    assert.equal(config.dns.rules.find(rule => rule.domain_suffix?.includes('dzen.ru')).server, 'dns-direct');
+    assert.equal(config.dns.rules.find(rule => rule.inbound === 'dns-health-in').server, 'dns-proxy');
+    assert.equal(config.inbounds[0].strict_route, mode === 'full');
+  }
+});
+
 test('application rules use exact paths and keep name-only fallback separate', () => {
   const config = buildConfig({
     server,
@@ -90,6 +102,50 @@ test('application rules use exact paths and keep name-only fallback separate', (
   const pathRule = config.route.rules.find((item) => item.outbound === 'proxy' && item.process_path);
   assert.deepEqual(nameRule.process_name, ['Telegram.exe']);
   assert.deepEqual(pathRule.process_path, ['C:\\Apps\\telegram.EXE', 'C:\\Other\\telegram.exe']);
+});
+
+test('excluded VPN sockets keep native DNS and IPv6 before generic interception', () => {
+  const excluded = 'C:\\VPN\\kvpncsvc.exe';
+  const config = buildConfig({ server, mode: 'bypass', applications: [{ path: excluded }],
+    customRouting: { proxy: ['vpn.example'] }, healthPort: 23456, tunAddress: '10.254.254.1/30' });
+  const rules = config.route.rules;
+  const exception = rules.findIndex(rule => rule.process_path?.includes(excluded));
+  const peer = rules.findIndex(rule => rule.ip_cidr?.includes('10.254.254.2/32') && rule.port === 53);
+  assert.ok(peer < exception);
+  assert.ok(exception < rules.findIndex(rule => rule.action === 'sniff'));
+  assert.ok(exception < rules.findIndex(rule => rule.ip_version === 6 && rule.action === 'reject'));
+  assert.ok(exception < rules.findIndex(rule => rule.protocol === 'dns'));
+  assert.ok(exception < rules.findIndex(rule => rule.domain_suffix?.includes('vpn.example')));
+  assert.equal(rules[exception].inbound, 'tun-in');
+  assert.equal(rules[exception].outbound, 'direct');
+  assert.equal(config.inbounds[0].strict_route, false);
+  assert.equal(rules.find(rule => rule.inbound === 'health-in').outbound, 'proxy');
+});
+
+test('split routing releases global DNS filters only when IPv6 is captured or fully disabled', () => {
+  for (const mode of ['selected', 'bypass']) {
+    const options = { server, mode, applications: [{ processName: 'example.exe' }] };
+    assert.equal(buildConfig(options).inbounds[0].strict_route, false);
+    for (const components of [0x11, 0xff, 0xffffffff]) {
+      const config = buildConfig({ ...options, systemIPv6Disabled: true, systemIPv6Components: components });
+      assert.equal(config.inbounds[0].strict_route, false);
+      assert.equal(config.inbounds[0].address.length, 1);
+    }
+    for (const components of [undefined, 0x10]) {
+      assert.equal(buildConfig({ ...options, systemIPv6Disabled: true, systemIPv6Components: components }).inbounds[0].strict_route, true);
+    }
+  }
+});
+
+test('physical upstream pins remote VPN and direct DNS without binding the local bridge', () => {
+  const options = { server, mode: 'bypass', applications: [], upstreamInterface: 'Ethernet', directDns: '192.0.2.53' };
+  const config = buildConfig(options);
+  assert.ok(config.outbounds.every(outbound => outbound.bind_interface === 'Ethernet'));
+  assert.equal(config.dns.servers.find(item => item.tag === 'dns-direct').bind_interface, 'Ethernet');
+  const bridge = buildConfig({ ...options, bridgePort: 23456 });
+  assert.equal(bridge.outbounds[0].bind_interface, undefined);
+  const hysteria = buildConfig({ ...options, server: { ...server, protocol: 'hysteria2', password: 'test' } });
+  assert.equal(hysteria.outbounds[0].bind_interface, 'Ethernet');
 });
 
 test('bypass mode allows an empty exclusion list', () => {
@@ -122,6 +178,7 @@ test('all supported sing-box transport configs pass bundled validation', { skip:
         mode: 'selected',
         applications: [{ path: 'C:\\Apps\\Telegram.exe' }],
         healthPort: 23456 + index,
+        directDns: '192.0.2.53', upstreamInterface: 'Ethernet',
         systemIPv6Disabled: index >= variants.length,
         ruleSetPaths
       })));

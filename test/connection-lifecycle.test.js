@@ -14,7 +14,8 @@ async function harness({ strategy = 'auto', probeDelay = 5, verifyError, verifyD
   const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'temple-lifecycle-'));
   const sourcePath = path.join(__dirname, '../src/main.js');
   const realRequire = createRequire(sourcePath);
-  const seen = { notices: [], probes: [], switches: [], logs: [], tunStarts: 0, tunNames:[], saves: 0, verified: 0, online: true, reserveChecks:0 };
+  const seen = { notices: [], probes: [], switches: [], logs: [], tunStarts: 0, tunNames:[], saves: 0, verified: 0, online: true, reserveChecks:0, healthChecks:0,
+    interfaces: {Ethernet:[{family:'IPv4',internal:false,address:'192.0.2.10',mac:'02:00:00:00:00:01'}]} };
   const handlers = {};
   const profiles = ['a','b','c'].map(id=>({id,name:id,host:'192.0.2.1',port:443,transport:'tcp',security:'none',uuid:'test'}));
   if(xhttp)for(const profile of profiles)profile.transport='xhttp';
@@ -22,22 +23,30 @@ async function harness({ strategy = 'auto', probeDelay = 5, verifyError, verifyD
   if(hysteria)for(const profile of profiles)Object.assign(profile,{protocol:'hysteria2',transport:'hysteria2',password:'test',security:'tls',serverName:'example.com'});
   const context = vm.createContext({
     require(name) {
+      if(name==='node:os')return {...os,networkInterfaces:()=>seen.interfaces};
       if(name==='./windows-ipv6')return {detectWindowsIPv6:async()=>({disabled:ipv6Disabled,status:'read',components:ipv6Disabled?4294967295:0})};
+      if(name==='./windows-dns')return {detectWindowsDirectDns:async()=>({server:'192.0.2.53',source:'windows-interface',interfaceName:'Ethernet'})};
       if(name==='./connection-notices')return {createConnectionNotices:()=>realRequire(name).createConnectionNotices((title,body)=>seen.notices.push({title,body}))};
-      if(name==='electron')return {net:{isOnline:()=>seen.online},dialog:{showMessageBox:async()=>({response:0})},app:{disableHardwareAcceleration(){},requestSingleInstanceLock:()=>true,
+      if(name==='electron')return {net:{isOnline:()=>seen.online},dialog:{showMessageBox:async()=>({response:0})},app:{getVersion:()=>realRequire('../package.json').version,disableHardwareAcceleration(){},requestSingleInstanceLock:()=>true,
         on(name,handler){handlers[`app:${name}`]=handler;},quit(){seen.quits=(seen.quits||0)+1;},whenReady:()=>({then(){}})},
         ipcMain:{handle:(name,handler)=>{handlers[name]=handler;}}};
       if(name==='./tunnel-pool')return {...realRequire(name),selectOutbound:async(_pool,id,signal)=>{
         seen.switches.push(id);if(switchDelay)await delay(switchDelay,undefined,{signal});if(switchError)throw switchError;
       }};
-      if(name==='./latency')return {...realRequire(name),checkTunnelReadiness:async()=>({status:seen.healthStatus || 'ok'}),checkTunnelConnectivity:async(_port,_timeout,_probe,signal)=>{
+      if(name==='./latency')return {...realRequire(name),checkTunnelReadiness:async()=>{
+        seen.healthChecks++;
+        if(seen.healthDelay)await delay(seen.healthDelay);
+        const advance=seen.healthClockAdvances?.shift();if(Number.isFinite(advance))seen.now+=advance;
+        return {status:seen.healthResults?.shift() || seen.healthStatus || 'ok'};
+      },checkTunnelConnectivity:async(_port,_timeout,_probe,signal)=>{
         seen.reserveChecks++;if(reserveDelay)await delay(reserveDelay,undefined,{signal});return {status:'ok',ms:20,kind:'tunnel'};
       }};
       if(name==='node:fs')return {...fs,existsSync:()=>true};
       if(name==='node:child_process')return {execFile:realRequire(name).execFile,spawn(_exe,args) {
         seen.tunStarts++;
         const config=JSON.parse(fs.readFileSync(args.includes('-c') ? args[args.indexOf('-c')+1] : args.at(-1)));
-        const tun=config.inbounds?.find(i=>i.type==='tun');if(tun){seen.tunNames.push(tun.interface_name);seen.tunAddresses=tun.address;}
+        const tun=config.inbounds?.find(i=>i.type==='tun');if(tun){seen.tunNames.push(tun.interface_name);seen.tunAddresses=tun.address;seen.dns=config.dns;seen.config=config;}
+        else if(config.outbounds?.some(outbound=>outbound.protocol==='vless'))seen.xrayConfig=config;
         const child=new EventEmitter();child.exitCode=null;child.stdout=new PassThrough();child.stderr=new PassThrough();
         child.kill=()=>{queueMicrotask(()=>{child.exitCode=0;child.emit('exit',0);});return true;};
         child.stdin=new PassThrough();child.stdin.on('finish',()=>child.kill());
@@ -95,6 +104,49 @@ function fakeGuard(h, mode = 'session') {
       seen.guardEvents.push(tun || '-');if(seen.guardFailure)throw new Error('Firewall unavailable');seen.guardActive=true;
     },async clear(){seen.guardEvents.push('clear');seen.guardActive=false;}};`,h.context);
 }
+
+test('startup fixes direct DNS on the physical resolver with Kill switch on or off', async t => {
+  for (const protection of ['off', 'session']) {
+    const h = await harness(); t.after(() => h.dispose());
+    if (protection !== 'off') fakeGuard(h, protection);
+    await h.context.start();
+    assert.equal(h.context.snapshot().status, 'connected');
+    const direct = h.seen.dns.servers.find(server => server.tag === 'dns-direct');
+    assert.equal(direct.type, 'udp');
+    assert.equal(direct.server, '192.0.2.53');
+    assert.equal(direct.detour, undefined);
+    assert.equal(direct.bind_interface, 'Ethernet');
+    assert.ok(h.seen.logs.some(line => line.includes('Прямой DNS: UDP IPv4')));
+  }
+});
+
+test('startup keeps native VPN members and direct fallback on the detected physical interface',async()=>{
+  const h=await harness();
+  try {
+    await h.context.start();
+    const native=h.seen.config.outbounds.filter(outbound=>outbound.type==='vless');
+    assert.ok(native.length>=2);
+    assert.ok(native.every(outbound=>outbound.bind_interface==='Ethernet'));
+    assert.equal(h.seen.config.outbounds.find(outbound=>outbound.tag==='direct').bind_interface,'Ethernet');
+    assert.equal(h.seen.config.dns.servers.find(server=>server.tag==='dns-direct').bind_interface,'Ethernet');
+    assert.equal(h.context.snapshot().status,'connected');
+  }finally{await h.dispose();}
+});
+
+test('Xray binds remote members to the physical interface while sing-box bridges remain on loopback',async()=>{
+  const h=await harness({xhttp:true});
+  try {
+    await h.context.start();
+    const bridges=h.seen.config.outbounds.filter(outbound=>outbound.type==='socks');
+    assert.ok(bridges.length>=2);
+    assert.ok(bridges.every(outbound=>outbound.server==='127.0.0.1' && outbound.bind_interface===undefined));
+    assert.ok(h.seen.xrayConfig.outbounds.length>=2);
+    assert.ok(h.seen.xrayConfig.outbounds.every(outbound=>outbound.streamSettings.sockopt.interface==='Ethernet'));
+    assert.equal(h.seen.config.outbounds.find(outbound=>outbound.tag==='direct').bind_interface,'Ethernet');
+    assert.equal(h.context.snapshot().status,'connected');
+  }finally{await h.dispose();}
+});
+
 test('kill switch arms before core startup and survives a core failure',async()=>{
   const h=await harness();fakeGuard(h);
   try{
@@ -592,6 +644,163 @@ test('network change records the reconnect cause before stopping the tunnel',asy
     assert.equal(h.context.snapshot().status,'reconnecting');
     assert.ok(h.seen.logs.some(message=>message.includes('смена сетевых интерфейсов')));
     assert.ok(h.seen.logs.some(message=>message.includes('Туннель остановлен')));
+  }finally{await h.dispose();}
+});
+
+test('adding and removing another VPN adapter preserves the same healthy TUN process',async()=>{
+  const h=await harness();
+  try {
+    await h.context.start();
+    await vm.runInContext('pollNetwork();globalThis.originalCore=coreProcess',h.context);
+    const initialStarts=h.seen.tunStarts;
+    h.seen.interfaces['Kerio Virtual Network']=[{family:'IPv4',internal:false,address:'198.51.100.10',mac:'02:00:00:00:00:02'}];
+    await vm.runInContext('pollNetwork()',h.context);
+    assert.equal(h.seen.healthChecks,0);
+    assert.equal(vm.runInContext('coreProcess===originalCore',h.context),true);
+    await vm.runInContext('networkStableAt=Date.now()-2001;pollNetwork()',h.context);
+    delete h.seen.interfaces['Kerio Virtual Network'];
+    await vm.runInContext('pollNetwork();networkStableAt=Date.now()-2001;pollNetwork()',h.context);
+    assert.equal(h.seen.healthChecks,2);
+    assert.equal(h.seen.tunStarts,initialStarts);
+    assert.equal(h.context.snapshot().status,'connected');
+    assert.equal(vm.runInContext('coreProcess===originalCore',h.context),true);
+    assert.equal(vm.runInContext('networkReconnect',h.context),false);
+    assert.ok(h.seen.logs.some(message=>message.includes('действующий туннель сохранён')));
+    assert.equal(h.seen.logs.some(message=>message.includes('Туннель остановлен')),false);
+  }finally{await h.dispose();}
+});
+
+test('a physical network address change retains a tunnel that still passes the protected check',async()=>{
+  const h=await harness();
+  try {
+    await h.context.start();
+    await vm.runInContext('pollNetwork();globalThis.originalCore=coreProcess',h.context);
+    h.seen.interfaces.Ethernet[0].address='192.0.2.11';
+    await vm.runInContext('pollNetwork();networkStableAt=Date.now()-2001;pollNetwork()',h.context);
+    assert.equal(h.seen.healthChecks,1);
+    assert.equal(h.seen.tunStarts,1);
+    assert.equal(h.context.snapshot().status,'connected');
+    assert.equal(vm.runInContext('coreProcess===originalCore',h.context),true);
+  }finally{await h.dispose();}
+});
+
+test('network changes during startup do not abort the final connection verification',async()=>{
+  const h=await harness({hysteria:true,strategy:'manual',verifyDelay:60});
+  try {
+    await vm.runInContext('pollNetwork()',h.context);
+    const pending=h.context.start();
+    for(let attempt=0;attempt<30 && !h.seen.verified;attempt++)await delay(5);
+    assert.equal(h.seen.verified,1);
+    h.seen.interfaces['Kerio Virtual Network']=[{family:'IPv4',internal:false,address:'198.51.100.10'}];
+    await vm.runInContext('pollNetwork()',h.context);
+    await pending;
+    assert.equal(h.context.snapshot().status,'connected');
+    assert.equal(h.seen.tunStarts,1);
+    assert.equal(h.seen.healthChecks,0);
+    assert.equal(vm.runInContext('networkReconnect',h.context),false);
+  }finally{await h.dispose();}
+});
+
+test('a brief outage after another VPN starts is confirmed before any TUN is stopped',async()=>{
+  const h=await harness();
+  try {
+    await h.context.start();
+    await vm.runInContext('pollNetwork();globalThis.originalCore=coreProcess',h.context);
+    h.seen.interfaces['Kerio Virtual Network']=[{family:'IPv4',internal:false,address:'198.51.100.10'}];
+    h.seen.healthResults=['timeout','ok'];
+    await vm.runInContext('pollNetwork();networkStableAt=Date.now()-2001;pollNetwork()',h.context);
+    assert.equal(h.seen.healthChecks,2);
+    assert.equal(h.seen.tunStarts,1);
+    assert.equal(h.context.snapshot().status,'connected');
+    assert.equal(vm.runInContext('coreProcess===originalCore',h.context),true);
+    assert.equal(h.seen.logs.some(message=>message.includes('Туннель остановлен')),false);
+  }finally{await h.dispose();}
+});
+
+test('a confirmed failure on a settled changed network pauses and restores a verified tunnel',async()=>{
+  const h=await harness();
+  try {
+    await h.context.start();
+    await vm.runInContext('pollNetwork()',h.context);
+    h.seen.now=Date.now();
+    vm.runInContext('Date.now=()=>seen.now',h.context);
+    h.seen.interfaces.Ethernet[0].address='192.0.2.11';
+    h.seen.healthResults=['timeout','timeout'];
+    h.seen.healthClockAdvances=[0,10001];
+    await vm.runInContext('pollNetwork();networkStableAt=Date.now()-2001;pollNetwork()',h.context);
+    assert.equal(h.context.snapshot().status,'reconnecting');
+    assert.equal(h.context.snapshot().running,false);
+    assert.equal(h.seen.healthChecks,2);
+    assert.equal(vm.runInContext('networkReconnect',h.context),true);
+    assert.ok(h.seen.logs.some(message=>message.includes('недоступен в течение 10 секунд')));
+    await vm.runInContext('pollNetwork()',h.context);
+    assert.equal(h.context.snapshot().status,'connected');
+    assert.equal(h.seen.tunStarts,2);
+    assert.equal(h.seen.verified,2);
+  }finally{await h.dispose();}
+});
+
+test('overlapping polls reuse the network check and manual disconnect invalidates its result',async()=>{
+  const h=await harness();
+  try {
+    await h.context.start();
+    await vm.runInContext('pollNetwork()',h.context);
+    h.seen.interfaces['Kerio Virtual Network']=[{family:'IPv4',internal:false,address:'198.51.100.10'}];
+    await vm.runInContext('pollNetwork()',h.context);
+    h.seen.healthDelay=60;
+    h.seen.healthStatus='timeout';
+    const pending=vm.runInContext('networkStableAt=Date.now()-2001;pollNetwork()',h.context);
+    await delay(5);
+    await vm.runInContext('pollNetwork()',h.context);
+    assert.equal(h.seen.healthChecks,1);
+    await h.context.disconnect();
+    await pending;
+    h.seen.healthStatus='ok';
+    await vm.runInContext('pollNetwork()',h.context);
+    assert.equal(h.context.snapshot().status,'disconnected');
+    assert.equal(h.context.snapshot().running,false);
+    assert.equal(h.seen.tunStarts,1);
+    assert.equal(vm.runInContext('networkReconnect',h.context),false);
+    assert.equal(vm.runInContext('healthCheckInFlight',h.context),false);
+  }finally{await h.dispose();}
+});
+
+test('a newer adapter change invalidates a failed check of the previous network',async()=>{
+  const h=await harness();
+  try {
+    await h.context.start();
+    await vm.runInContext('pollNetwork();globalThis.originalCore=coreProcess',h.context);
+    h.seen.interfaces['Kerio Virtual Network']=[{family:'IPv4',internal:false,address:'198.51.100.10'}];
+    await vm.runInContext('pollNetwork()',h.context);
+    h.seen.healthDelay=60;
+    h.seen.healthStatus='timeout';
+    const pending=vm.runInContext('networkStableAt=Date.now()-2001;pollNetwork()',h.context);
+    await delay(5);
+    delete h.seen.interfaces['Kerio Virtual Network'];
+    await vm.runInContext('pollNetwork()',h.context);
+    await pending;
+    h.seen.healthStatus='ok';
+    await vm.runInContext('networkStableAt=Date.now()-2001;pollNetwork()',h.context);
+    assert.equal(h.seen.healthChecks,2);
+    assert.equal(h.seen.tunStarts,1);
+    assert.equal(h.context.snapshot().status,'connected');
+    assert.equal(vm.runInContext('coreProcess===originalCore',h.context),true);
+    assert.equal(h.seen.logs.some(message=>message.includes('Туннель остановлен')),false);
+  }finally{await h.dispose();}
+});
+
+test('an offline signal still pauses immediately even when an adapter recheck is pending',async()=>{
+  const h=await harness();
+  try {
+    await h.context.start();
+    await vm.runInContext('pollNetwork()',h.context);
+    h.seen.interfaces.Ethernet[0].address='192.0.2.11';
+    h.seen.online=false;
+    await vm.runInContext('pollNetwork()',h.context);
+    assert.equal(h.context.snapshot().status,'reconnecting');
+    assert.equal(h.context.snapshot().running,false);
+    assert.equal(h.seen.healthChecks,0);
+    assert.ok(h.seen.logs.some(message=>message.includes('Windows сообщает об отсутствии сети')));
   }finally{await h.dispose();}
 });
 

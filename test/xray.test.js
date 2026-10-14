@@ -35,13 +35,25 @@ test('builds VLESS XHTTP REALITY client with a loopback SOCKS inbound', () => {
   assert.deepEqual(config.outbounds[0].streamSettings.xhttpSettings.extra, { xPaddingBytes: '100-1000' });
 });
 
+test('physical egress applies to both XHTTP directions without mutating imported settings', () => {
+  const extra = { downloadSettings: { sockopt: { tcpFastOpen: true, interface: 'other' } } };
+  const config = buildXrayConfig({ server: { ...server, xhttpExtra: extra }, socksPort: 19080, upstreamInterface: 'Ethernet' });
+  const stream = config.outbounds[0].streamSettings;
+  assert.equal(stream.sockopt.interface, 'Ethernet');
+  assert.equal(stream.xhttpSettings.extra.downloadSettings.sockopt.interface, 'Ethernet');
+  assert.equal(stream.xhttpSettings.extra.downloadSettings.sockopt.tcpFastOpen, true);
+  assert.equal(extra.downloadSettings.sockopt.tcpFastOpen, true);
+  assert.equal(extra.downloadSettings.sockopt.interface, 'other');
+  assert.equal(config.inbounds[0].listen, '127.0.0.1');
+});
+
 test('generated XHTTP config passes bundled Xray validation', { skip: process.platform !== 'win32' }, () => {
   const executable = path.join(__dirname, '..', 'vendor', 'xray', 'xray.exe');
   if (!fs.existsSync(executable)) return;
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'temple-xray-'));
   const configPath = path.join(directory, 'config.json');
   try {
-    fs.writeFileSync(configPath, JSON.stringify(buildXrayConfig({ server, socksPort: 19080 })));
+    fs.writeFileSync(configPath, JSON.stringify(buildXrayConfig({ server, socksPort: 19080, upstreamInterface: 'Ethernet' })));
     const result = spawnSync(executable, ['run', '-test', '-c', configPath], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   } finally {

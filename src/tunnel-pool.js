@@ -14,6 +14,7 @@ function preparePool(config, active, candidates, port, bridgePorts = new Map(), 
   if (active.transport === 'xhttp' && !bridgePorts.has(active.id)) return null;
   const members = new Map();
   const outbounds = [];
+  const direct = config.outbounds?.find(outbound => outbound.tag === 'direct') || { type: 'direct', tag: 'direct' };
   for (const server of [active, ...candidates]) {
     if (members.size >= 5) break;
     if (members.has(server.id) || (server.transport === 'xhttp' && !bridgePorts.has(server.id))) continue;
@@ -21,7 +22,7 @@ function preparePool(config, active, candidates, port, bridgePorts = new Map(), 
       && server.security === 'reality' && !bridgePorts.has(server.id)) continue;
     try {
       const tag = `node-${crypto.createHash('sha256').update(server.id).digest('hex').slice(0, 24)}`;
-      outbounds.push({ ...buildOutbound(server, bridgePorts.get(server.id) || 0), tag });
+      outbounds.push({ ...buildOutbound(server, bridgePorts.get(server.id) || 0, direct.bind_interface), tag });
       members.set(server.id, tag);
     } catch { /* An invalid reserve must not prevent the working server starting. */ }
   }
@@ -30,7 +31,7 @@ function preparePool(config, active, candidates, port, bridgePorts = new Map(), 
   config.outbounds = [
     { type: 'selector', tag: 'proxy', outbounds: [...members.values()],
       default: members.get(active.id), interrupt_exist_connections: true },
-    ...outbounds, { type: 'direct', tag: 'direct' }
+    ...outbounds, direct
   ];
   config.experimental = { clash_api: { external_controller: `127.0.0.1:${port}`, secret } };
   const checks = new Map();

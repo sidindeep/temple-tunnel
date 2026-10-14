@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { setTimeout: delay } = require('node:timers/promises');
 const { buildConfig } = require('./singbox');
+const { reserveLoopbackPort } = require('./loopback-port');
 const { buildXrayConfig } = require('./xray');
 const { checkTunnelConnectivity } = require('./latency');
 const { connectionError, classifyConnectionError } = require('./connection-errors');
@@ -32,17 +33,6 @@ async function resolveServer(server, lookup = encryptedLookup, timeoutMs = 5000,
     clearTimeout(timer);
     signal?.removeEventListener('abort', cancel);
   }
-}
-
-async function allocatePort() {
-  return new Promise((resolve, reject) => {
-    const listener = net.createServer();
-    listener.once('error', reject);
-    listener.listen(0, '127.0.0.1', () => {
-      const port = listener.address().port;
-      listener.close(error => error ? reject(error) : resolve(port));
-    });
-  });
 }
 
 function portReady(port, signal) {
@@ -113,12 +103,12 @@ async function probeServerOnce(server, executable, xrayExecutable, { signal, tim
     const resolved = await resolveServer(server, encryptedLookup, Math.min(3000, timeoutMs), controller.signal);
     stage('dns');
     assertActive(controller.signal);
-    const port = await allocatePort();
+    const port = await reserveLoopbackPort({ udp: true });
     directory = await fs.mkdtemp(path.join(os.tmpdir(), 'temple-probe-'));
     assertActive(controller.signal);
     let bridgePort = 0, bridge;
     if (server.transport === 'xhttp' || server.connectionEngine === 'xray') {
-      bridgePort = await allocatePort();
+      bridgePort = await reserveLoopbackPort({ udp: true });
       const bridgeFile = path.join(directory, 'xray.json');
       await fs.writeFile(bridgeFile, JSON.stringify(buildXrayConfig({ server: resolved, socksPort: bridgePort })), { mode: 0o600 });
       bridge = start(xrayExecutable, ['run', '-c', bridgeFile]);

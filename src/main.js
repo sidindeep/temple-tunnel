@@ -12,6 +12,8 @@ const { spawn } = require('node:child_process');
 const { downloadSubscription, isSupportedTransport } = require('./subscription');
 const { buildConfig } = require('./singbox');
 const { detectWindowsIPv6 } = require('./windows-ipv6');
+const { detectWindowsDirectDns } = require('./windows-dns');
+const { reserveLoopbackPort } = require('./loopback-port');
 const { buildXrayConfig, buildXrayGroup } = require('./xray');
 const { measureEndpointLatency, measureTunnelLatency, checkTunnelConnectivity, checkTunnelReadiness } = require('./latency');
 const { resolveServer, probeServer } = require('./server-probe');
@@ -150,6 +152,8 @@ let networkSuspended = false;
 let networkReconnect = false;
 let networkTransition;
 let networkSignature;
+let networkRecheckNeeded = false;
+let networkCheckInFlight;
 let networkStableAt = 0;
 let networkRetryAt = 0;
 let networkRetryAttempt = 0;
@@ -781,16 +785,8 @@ async function removeRuntimeConfig(configPath) {
   }
 }
 
-function allocateLoopbackPort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      server.close((error) => error ? reject(error) : resolve(address.port));
-    });
-  });
+function allocateLoopbackPort(udp = false) {
+  return reserveLoopbackPort({ udp });
 }
 
 function probeHttpConnect(port, timeoutMs = 12000) {
@@ -1165,6 +1161,7 @@ async function pauseForNetwork(cause = 'offline') {
     offline: 'Windows сообщает об отсутствии сети'
   }[cause] || 'изменение доступности сети';
   log(`VPN приостановлен: ${causeLabel}.`);
+  networkRecheckNeeded = false;
   networkReconnect = true;
   networkRetryAt = 0;
   const pending = (async () => {
@@ -1180,6 +1177,52 @@ async function pauseForNetwork(cause = 'offline') {
   try { await pending; } finally { if (networkTransition === pending) networkTransition = undefined; }
 }
 
+async function checkChangedNetwork() {
+  if (networkCheckInFlight || healthCheckInFlight || connectionController || !coreProcess || !activeHealthPort
+    || !['connected', 'reconnecting'].includes(state.status)) return;
+  const checkedCore = coreProcess;
+  const checkedPort = activeHealthPort;
+  const checkedServerId = state.selectedServerId;
+  const checkedOperation = tunnelOperationId;
+  const checkedSignature = networkSignature;
+  const stillCurrent = () => coreProcess === checkedCore && checkedCore.exitCode === null
+    && activeHealthPort === checkedPort && state.selectedServerId === checkedServerId
+    && tunnelOperationId === checkedOperation && networkSignature === checkedSignature
+    && !networkSuspended && !networkReconnect && !networkTransition && electronNet?.isOnline() !== false
+    && ['connected', 'reconnecting'].includes(state.status);
+  const check = async () => {
+    try { return await checkTunnelReadiness(checkedPort); }
+    catch { return { status: 'error' }; }
+  };
+  networkRecheckNeeded = false;
+  const pending = (async () => {
+    // Share the health-check lock: a second monitor must not race this decision.
+    healthCheckInFlight = true;
+    try {
+      log('Сеть изменилась; проверяем VPN без остановки туннеля.');
+      let result = await check();
+      if (!stillCurrent()) return;
+      const confirmationDeadline = Date.now() + 10000;
+      while (result.status !== 'ok') {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (!stillCurrent()) return;
+        result = await check();
+        if (!stillCurrent()) return;
+        if (result.status !== 'ok' && Date.now() >= confirmationDeadline) {
+          log('После смены сети VPN недоступен в течение 10 секунд; восстанавливаем подключение.');
+          await pauseForNetwork('interfaces');
+          return;
+        }
+      }
+      if (activePool) activePool.activeConfirmedAt = Date.now();
+      log('VPN доступен после смены сети; действующий туннель сохранён.');
+    } finally { healthCheckInFlight = false; }
+  })();
+  networkCheckInFlight = pending;
+  try { await pending; }
+  finally { if (networkCheckInFlight === pending) networkCheckInFlight = undefined; }
+}
+
 async function pollNetwork() {
   const signature = JSON.stringify(Object.entries(os.networkInterfaces())
     .filter(([name]) => !/temple|browsec|tun|tap|loopback/i.test(name))
@@ -1188,16 +1231,29 @@ async function pollNetwork() {
   const changed = networkSignature !== undefined && signature !== networkSignature;
   if (signature !== networkSignature) networkStableAt = Date.now();
   networkSignature = signature;
+  if (!coreProcess || !activeHealthPort) networkRecheckNeeded = false;
+  else if (changed) networkRecheckNeeded = true;
   if (networkSuspended || networkTransition) return;
-  if (changed || electronNet?.isOnline() === false) {
-    await pauseForNetwork(changed ? 'interfaces' : 'offline');
+  if (electronNet?.isOnline() === false) {
+    await pauseForNetwork('offline');
+    return;
+  }
+  // Other VPNs add/remove adapters while connecting. Keep the current tunnel
+  // unless a protected check confirms that the settled network broke it.
+  if (networkRecheckNeeded && !networkReconnect) {
+    if (Date.now() - networkStableAt >= 2000) await checkChangedNetwork();
     return;
   }
   if (!networkReconnect || Date.now() - networkStableAt < 2000 || Date.now() < networkRetryAt) return;
   networkReconnect = false;
   log('Сеть доступна; повторная проверка подключения.');
+  const operationId = tunnelOperationId;
+  const disconnectId = manualDisconnectId;
   try { await startTunnel({ retry: true }); }
-  catch { state.status = 'error'; state.error = 'Не удалось восстановить VPN после смены сети.'; pushState(); }
+  catch {
+    if (manualStopSince(disconnectId) || tunnelOperationId !== operationId + 1) return;
+    state.status = 'error'; state.error = 'Не удалось восстановить VPN после смены сети.'; pushState();
+  }
 }
 
 async function tryHotSwitch(automatic, operationId) {
@@ -1361,13 +1417,16 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
     stage('Сервер выбран; готовим проверку основного туннеля.');
     stage(`DNS готов; сервер: ${crypto.createHash('sha256').update(server.id).digest('hex').slice(0, 12)}; транспорт: ${server.transport}; режим: ${state.mode}.`);
     assertTunnelOperation(operationId, automatic);
+    const directDns = await detectWindowsDirectDns();
+    assertTunnelOperation(operationId, automatic);
+    stage(`Прямой DNS: UDP IPv4; источник ${directDns.source === 'windows-interface' ? 'сетевой интерфейс Windows' : 'резервный публичный резолвер'}; маршрут direct; физический выход ${directDns.interfaceName ? 'зафиксирован' : 'не определён, используется auto-detect'}.`);
     const poolCandidates = [resolvedServer, ...rankCandidates(servers().filter(item => isSupportedTransport(item.transport)
       && (useXray || item.transport !== 'xhttp')), { history: memory.history })]
       .filter((item, index, all) => all.findIndex(candidate => candidate.id === item.id) === index).slice(0, 5);
     const bridgePorts = new Map();
     let bridgePort = 0;
     if (useXray) {
-      bridgePort = await allocateLoopbackPort();
+      bridgePort = await allocateLoopbackPort(true);
       bridgePorts.set(server.id, bridgePort);
       assertTunnelOperation(operationId, automatic);
       const bridgeMembers = [{ server: resolvedServer, port: bridgePort }];
@@ -1376,10 +1435,10 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
         .map(async item => { try { return await resolveServer(item, undefined, 300, signal); } catch { return null; } }));
       assertTunnelOperation(operationId, automatic);
       for (const backup of resolvedBackups.filter(Boolean)) {
-        const port = await allocateLoopbackPort();
+        const port = await allocateLoopbackPort(true);
         bridgePorts.set(backup.id, port); bridgeMembers.push({server:backup, port});
       }
-      const xrayConfig = buildXrayGroup(bridgeMembers);
+      const xrayConfig = buildXrayGroup(bridgeMembers, directDns.interfaceName);
       assertTunnelOperation(operationId, automatic);
       xrayConfigFile = path.join(runtimeDir(), `xray-${crypto.randomUUID()}.json`);
       xrayConfigPath = xrayConfigFile;
@@ -1389,7 +1448,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
       } catch(error) {
         if (signal.aborted || bridgeMembers.length < 2) throw error;
         bridgePorts.clear(); bridgePorts.set(server.id, bridgePort);
-        await fsp.writeFile(xrayConfigFile, JSON.stringify(buildXrayConfig({server:resolvedServer,socksPort:bridgePort})), {mode:0o600});
+        await fsp.writeFile(xrayConfigFile, JSON.stringify(buildXrayConfig({server:resolvedServer,socksPort:bridgePort,upstreamInterface:directDns.interfaceName})), {mode:0o600});
         await validateCoreConfig(xrayExecutable, ['run', '-test', '-c', xrayConfigFile], 'Проверка XHTTP-конфигурации завершилась ошибкой.', signal);
         stage('Некорректный резерв XHTTP исключён; основной профиль сохранён.');
       }
@@ -1441,7 +1500,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
       assertTunnelOperation(operationId, automatic);
     }
 
-    const healthPort = await allocateLoopbackPort();
+    const healthPort = await allocateLoopbackPort(true);
     assertTunnelOperation(operationId, automatic);
     const tunAddress = chooseTunAddress();
     // Wintun may still be deleting the previous adapter after process exit.
@@ -1450,14 +1509,15 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
     const systemIPv6 = await detectWindowsIPv6();
     assertTunnelOperation(operationId, automatic);
     stage(systemIPv6.status === 'read'
-      ? `Windows DisabledComponents: 0x${systemIPv6.components.toString(16)}; IPv6 TUN: ${systemIPv6.disabled ? 'отключён системной настройкой, используется IPv4 и strict_route' : 'включён'}.`
+      ? `Windows DisabledComponents: 0x${systemIPv6.components.toString(16)}; IPv6 TUN: ${systemIPv6.disabled ? 'отключён системной настройкой, используется IPv4' : 'включён'}.`
       : 'Системная настройка IPv6 не определена; сохраняем перехват IPv4 и IPv6.');
     const config = buildConfig({
       server: resolvedServer,
       customRouting: state.customRouting,
       dnsPreset: state.dnsPreset,
       ipv6Policy: state.ipv6Policy, dnsPolicy: state.dnsPolicy,
-      directDns: state.killSwitch !== 'off' ? require('node:dns').getServers().find(ip => net.isIP(ip) === 4) || '1.1.1.1' : undefined,
+      directDns: directDns.server,
+      upstreamInterface: directDns.interfaceName,
       applications: state.mode === 'bypass' ? state.bypassApplications : state.selectedApplications,
       mode: state.mode,
       russianSitesViaVpn: state.russianSitesViaVpn !== false,
@@ -1466,6 +1526,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
       tunAddress,
       tunName,
       systemIPv6Disabled: systemIPv6.disabled,
+      systemIPv6Components: systemIPv6.components,
       ruleSetPaths
     });
     const tun = config.inbounds.find(item => item.type === 'tun');
@@ -1474,7 +1535,7 @@ async function startTunnel({ automatic = false, retry = false } = {}) {
     const probePorts = new Map();
     for (const candidate of poolCandidates) {
       if (candidate.protocol === 'hysteria2') continue;
-      if (candidate.transport !== 'xhttp' || bridgePorts.has(candidate.id)) probePorts.set(candidate.id, await allocateLoopbackPort());
+      if (candidate.transport !== 'xhttp' || bridgePorts.has(candidate.id)) probePorts.set(candidate.id, await allocateLoopbackPort(true));
     }
     let pool = preparePool(config, resolvedServer, poolCandidates, await allocateLoopbackPort(), bridgePorts, probePorts);
     if (pool) pool.key = poolKey(state, servers());

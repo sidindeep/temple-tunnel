@@ -10,11 +10,15 @@ const { once } = require('node:events');
 const { setTimeout: delay } = require('node:timers/promises');
 const { preparePool, selectOutbound, poolKey } = require('../src/tunnel-pool');
 const { buildConfig } = require('../src/singbox');
+const { reserveLoopbackPort } = require('../src/loopback-port');
 const profile = id => ({id,transport:'tcp',security:'none',host:'127.0.0.1',port:443,
   uuid:'550e8400-e29b-41d4-a716-446655440000'});
 async function port() {
   const server = net.createServer();server.listen(0,'127.0.0.1');await once(server,'listening');
   const value=server.address().port;await new Promise(resolve=>server.close(resolve));return value;
+}
+async function healthPort() {
+  return reserveLoopbackPort({ udp: true });
 }
 function get(pool, token=pool.secret) {
   return new Promise((resolve,reject)=>{
@@ -35,9 +39,9 @@ test('real sing-box switches native outbounds through authenticated loopback API
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'temple-pool-test-'));
   let child;
   try {
-    const apiPort=await port(),healthPort=await port();
+    const apiPort=await port(),health=await healthPort();
     const a=profile('a'), b=profile('b');a.port=await port();b.port=await port();
-    const config=buildConfig({server:a,applications:[],mode:'full',healthPort});
+    const config=buildConfig({server:a,applications:[],mode:'full',healthPort:health});
     const pool=preparePool(config,a,[b],apiPort);
     config.inbounds=config.inbounds.filter(item=>item.type!=='tun');
     // Local VLESS peers exercise the actual data path without touching the system TUN or Internet.
@@ -62,7 +66,7 @@ test('real sing-box switches native outbounds through authenticated loopback API
         await selectOutbound(pool,server.id);
         assert.equal((await get(pool)).body.now,pool.members.get(server.id));
         await new Promise((resolve,reject)=>{
-          const socket=net.createConnection({host:'127.0.0.1',port:healthPort});
+          const socket=net.createConnection({host:'127.0.0.1',port:health});
           const timer=setTimeout(()=>socket.destroy(Error('Proxy data timeout')),2000);
           let received='',sent=false;
           socket.on('connect',()=>socket.write(`CONNECT 127.0.0.1:${echo.address().port} HTTP/1.1\r\nHost: localhost\r\n\r\n`));

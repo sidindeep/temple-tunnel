@@ -26,7 +26,7 @@ function buildXrayTls(server) {
   return { security: 'none' };
 }
 
-function buildXrayConfig({ server, socksPort }) {
+function buildXrayConfig({ server, socksPort, upstreamInterface }) {
   if (!server || !['xhttp','tcp'].includes(server.transport)) {
     throw new Error('Xray-конфигурация поддерживает XHTTP и TCP.');
   }
@@ -39,7 +39,15 @@ function buildXrayConfig({ server, socksPort }) {
     path: server.path || '/',
     mode: server.xhttpMode || 'auto'
   };
-  if (server.xhttpExtra) xhttpSettings.extra = server.xhttpExtra;
+  if (server.xhttpExtra) {
+    xhttpSettings.extra = server.xhttpExtra;
+    if (upstreamInterface && server.xhttpExtra.downloadSettings) {
+      xhttpSettings.extra = { ...server.xhttpExtra, downloadSettings: {
+        ...server.xhttpExtra.downloadSettings,
+        sockopt: { ...server.xhttpExtra.downloadSettings.sockopt, interface: upstreamInterface }
+      } };
+    }
+  }
 
   const user = {
     id: server.uuid,
@@ -68,6 +76,7 @@ function buildXrayConfig({ server, socksPort }) {
       },
       streamSettings: {
         network: server.transport,
+        ...(upstreamInterface ? { sockopt: { interface: upstreamInterface } } : {}),
         ...buildXrayTls(server),
         ...(server.transport === 'xhttp' ? {xhttpSettings} : {})
       }
@@ -75,10 +84,10 @@ function buildXrayConfig({ server, socksPort }) {
   };
 }
 
-function buildXrayGroup(members) {
+function buildXrayGroup(members, upstreamInterface) {
   const config = { log: { loglevel: 'warning' }, inbounds: [], outbounds: [], routing: { rules: [] } };
   for (const [index, {server, port}] of members.entries()) {
-    const single = buildXrayConfig({server, socksPort:port});
+    const single = buildXrayConfig({server, socksPort:port, upstreamInterface});
     const inboundTag = `bridge-in-${index}`, outboundTag = `bridge-out-${index}`;
     config.inbounds.push({...single.inbounds[0], tag:inboundTag});
     config.outbounds.push({...single.outbounds[0], tag:outboundTag});

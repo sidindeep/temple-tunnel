@@ -16,7 +16,7 @@ test('routing normalizes IDN and addresses, deduplicates and rejects ambiguous o
   assert.throws(()=>normalizeRouting({block:Array(501).fill('example.com')}));
   assert.throws(()=>normalizeDns('__proto__'));
 });
-test('custom rules precede application and regional rules; DNS follows domain decisions',()=>{
+test('custom rules precede selected applications; explicit bypass stays outside domain interception',()=>{
   for(const mode of ['full','selected','bypass']) {
     const config=buildConfig({server:{host:'192.0.2.1',port:443,uuid:'550e8400-e29b-41d4-a716-446655440000',security:'none'},
       applications:[{processName:'test.exe'}],mode,dnsPreset:'cloudflare',
@@ -25,7 +25,9 @@ test('custom rules precede application and regional rules; DNS follows domain de
     assert.deepEqual(custom.map(rule=>rule.action),['reject','route','route']);
     const dns=config.dns.rules.filter(rule=>rule.domain_suffix?.includes('example.com'))[0];
     assert.equal(dns.server,'dns-proxy');
-    assert.ok(config.route.rules.indexOf(custom[0])<config.route.rules.findIndex(rule=>rule.process_name?.includes('test.exe'))||mode==='full');
+    const applicationIndex=config.route.rules.findIndex(rule=>rule.process_name?.includes('test.exe'));
+    if(mode==='selected')assert.ok(config.route.rules.indexOf(custom[0])<applicationIndex);
+    if(mode==='bypass')assert.ok(applicationIndex>=0 && applicationIndex<config.route.rules.indexOf(custom[0]));
     assert.equal(config.dns.servers[1].detour,'proxy');assert.equal(config.dns.servers[1].type,'https');
   }
   assert.notEqual(poolKey({dnsPreset:'legacy'},[]),poolKey({dnsPreset:'cloudflare'},[]));
