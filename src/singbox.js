@@ -136,6 +136,11 @@ function buildDns({ mode, applications, useRussianBypass, customRouting, dnsPres
   }
   if (mode === 'selected') {
     rules.push(...applicationRules(applications, { action: 'route', server: 'dns-proxy' }));
+    // Windows DNS Client sends system lookups from a shared service, not the
+    // requesting EXE. Keep explicit domain exceptions above this fallback.
+    if (dnsPolicy === 'routing') {
+      rules.push({ process_name: ['svchost.exe'], action: 'route', server: 'dns-proxy' });
+    }
   } else if (mode === 'bypass') {
     rules.push(...applicationRules(applications, { action: 'route', server: 'dns-direct' }));
   }

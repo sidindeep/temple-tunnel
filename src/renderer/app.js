@@ -10,6 +10,7 @@ const renderSignatures = { applications: '', servers: '', subscriptions: '' };
 
 const elements = {
   nav: [...document.querySelectorAll('.nav')],
+  connectionTabs: [...document.querySelectorAll('[data-connection-tab]')],
   pages: {
     home: document.getElementById('homePage'),
     connection: document.getElementById('connectionPage'),
@@ -107,6 +108,32 @@ function showPage(name) {
   Object.entries(elements.pages).forEach(([key, page]) => page.classList.toggle('active', key === name));
   if (name === 'logs' && currentState) renderLogs(currentState.logs, true);
 }
+
+function showConnectionTab(name) {
+  for (const button of elements.connectionTabs) {
+    const selected = button.dataset.connectionTab === name;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
+    document.getElementById(button.getAttribute('aria-controls')).hidden = !selected;
+  }
+}
+
+elements.connectionTabs.forEach((button, index) => {
+  button.addEventListener('click', () => showConnectionTab(button.dataset.connectionTab));
+  button.addEventListener('keydown', event => {
+    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+    if (!keys.includes(event.key)) return;
+    event.preventDefault();
+    const count = elements.connectionTabs.length;
+    const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? count - 1
+      : (index + (event.key === 'ArrowRight' ? 1 : -1) + count) % count;
+    const next = elements.connectionTabs[nextIndex];
+    showConnectionTab(next.dataset.connectionTab);
+    next.focus();
+  });
+});
+showConnectionTab('applications');
 
 function renderApplications(applications, suggestedApplications, mode) {
   elements.appList.replaceChildren();
@@ -342,6 +369,7 @@ function renderStatus(state) {
 }
 
 function render(state) {
+  document.getElementById('appVersion').textContent = state.version ? `Версия ${state.version}` : '';
   if (!routingDirty) {
     for (const key of ['proxy', 'direct', 'block']) document.getElementById(`route${key[0].toUpperCase()}${key.slice(1)}`).value = (state.customRouting?.[key] || []).join('\n');
     document.getElementById('dnsPreset').value = state.dnsPreset || 'legacy';
@@ -399,7 +427,7 @@ function render(state) {
   document.getElementById('russianSitesViaVpn').disabled = ['connecting', 'disconnecting', 'reconnecting'].includes(state.status);
   const directRoutes = state.customRouting?.direct || [];
   document.getElementById('siteExceptionStatus').textContent = directRoutes.length
-    ? `Исключения: ${directRoutes.join(', ')}` : 'Домен и его поддомены будут открываться напрямую.';
+    ? `Всего исключений: ${directRoutes.length}.` : 'Исключений пока нет. Добавьте домен выше.';
   const siteList = document.getElementById('siteExceptionList');
   siteList.replaceChildren();
   for (const domain of directRoutes) {

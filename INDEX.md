@@ -13,6 +13,8 @@
 - [FTP](patterns/AGENTS_RUNTIME/09-ftp.md)
 - [Runtime and defaults](patterns/AGENTS_RUNTIME/09-runtime-and-defaults.md)
 - [Testing](patterns/AGENTS_RUNTIME/09-testing.md)
+- [Full-system testing](patterns/AGENTS_RUNTIME/09-full-testing.md)
+- [Project testing scaffold](templates/PROJECT_TESTING.template.md)
 - [Build and install](patterns/AGENTS_RUNTIME/09-build-and-install.md)
 - [Project memory operations](patterns/AGENTS_RUNTIME/09-project-memory-operations.md)
 - [Git workflow](patterns/GIT_WORKFLOW.md)

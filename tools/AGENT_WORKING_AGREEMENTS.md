@@ -39,6 +39,12 @@
 - Do not revert user changes unless explicitly requested.
 - Treat dirty worktrees as normal.
 - If user changes affect the task, work with them.
+- Before meaningful implementation, bug fixes, or refactoring, apply the system
+  mechanism gate in `patterns/ARCHITECTURE_AND_CODE_QUALITY.md`. Record a scoped
+  scenario -> mechanism -> contract owner -> change location -> verification
+  mapping using current source. Correct the cause at its owner, reuse or extend
+  existing mechanisms, and justify bypasses with constraints, side effects,
+  and a removal/review condition. Verify behavior and related invariants.
 - Preserve recorded feature workflow contracts. If a feature has an agreed
   runtime workflow, loading order, branching state flow, background work, or
   user-visible guarantee, read that contract before changing the feature and
@@ -92,6 +98,13 @@
 
 ## Git
 
+- Keep rebuildable builds, frontend bundles, installers, and intermediate
+  output in dedicated ignored directories; exclude them from staging, commits,
+  and pushes to source repositories unless an exact project-specific exception
+  is explicitly approved. Keep source and build inputs versioned. Follow
+  `patterns/AGENTS_RUNTIME/09-build-and-install.md` for authorized output-layout
+  cleanup, index removal that preserves local files, and clean-checkout checks.
+
 - Default: the agent edits and verifies; the user reviews and commits.
 - This default permits agent commits on explicit GI Git-finish commands below.
   If a project intentionally forbids all agent commits, state that exception
@@ -101,9 +114,11 @@
   git finish requests. `gi коммит` commits scoped current changes only; `gi пуш`
   and `gi коммит пуш` commit scoped current changes and push the current branch;
   `gi только пуш` pushes existing local commits without creating a new commit.
-  Do not reinterpret `gi пуш` as a raw `git push`, a retry of a previous
-  terminal push, or a push-only command; if there are no scoped changes to
-  commit, report that clearly instead of falling back to push-only behavior.
+  Do not skip eligible selected changes by treating `gi пуш` as a raw push or
+  a retry of a terminal push. If no eligible selected changes need a new commit,
+  still push existing outgoing commits after compact Git safety checks; do not
+  create an empty commit or require a second push-only command. If nothing
+  needs committing or pushing, report that state.
   Inspect status, keep changes outside the resolved scope out, follow commit-message
   preferences, and stop on ambiguous scope, missing remote, conflicts, secrets,
   or push failures.
@@ -121,6 +136,20 @@
   Do not expand an active task from apparent file similarity. Ask only about
   concrete conflicting scope instructions or inseparable excluded changes.
   `gi only push` never selects working-tree files.
+- Treat `gi push all`, `ги пуш всё`, `ги пуш все`, and equivalent commit or
+  commit/push forms as explicit selection of all eligible current repository
+  changes, overriding the active-task default. Include staged, unstaged,
+  untracked, deleted, and pre-existing changes. Preserve concrete separate-work
+  reservations and report conflicts. Old summaries alone do not establish an
+  active task in a new chat. Keep safety exclusions and ignored files; do not
+  expand to other repositories, worktrees, branches, or force-push.
+  `gi only push all` remains push-only.
+- Inventory with `git status --short --untracked-files=all` and reconcile the
+  staged diff with the resolved selection before committing; do not commit
+  excluded staged changes or silently reset the user's index. Report each
+  remaining changed path with its exclusion reason or blocker after finish.
+  Eligible selected residue means incomplete work. Explain expected ignored
+  files with `git check-ignore` instead of force-adding them.
 - Git finish does not authorize new implementation, test-expectation rewrites,
   runtime-state deletion, dependency changes, service restart/rebuild, or broad
   cleanup merely to make checks pass. Fix a verification failure only when the
@@ -386,25 +415,22 @@ or:
   test commands and produce a compact verification plan for the current feature,
   bug fix, or release check. Plan first; run checks only when the user asks or
   when the current task already requires verification.
-- Treat `gi test task`, `gi testing task`, `gi тест таск`, `ги тест таск`, and
-  equivalent wording as requests to set the active release/full-system
-  verification workload for the current project. The supplied task text is the
-  scenario for the next `gi test`, not evidence that the scenario already
-  passed.
-- Treat `gi test`, `ги тест`, `gi full test`, `gi release test`, and equivalent
-  full-project test wording as requests to run the documented verification flow
-  against the active test task. Do not confuse this with `gi test plan`, which
-  remains plan-only by default. Dry-runs, simulations, dispatcher-only runs,
-  replayed logs, mock-only checks, and compile/unit-only checks are diagnostics
-  only and must not be run during `gi test` unless the user explicitly asks for
-  that diagnostic mode; they must never be reported as a passed `gi test`.
-  Exercise the documented live runtime surface for the selected task, including
-  apps, backend/API, storage, queues/workers, UI/auth, service discovery,
-  orchestrator or agent handoff loops, and health/contract endpoints when the
-  project defines them. If the live system cannot be started or reached, report
-  `gi test` as blocked or not checked. Old summaries, screenshots, completed
-  demos, previous task statuses, and old chat snippets are evidence only; rerun
-  the current documented checks or report the exact blocker.
+- Treat `gi test` / `ги тест` as information about the tester and local scenarios,
+  settings, prerequisites, and gaps; do not execute or mutate runtime state.
+- Treat `gi test start` / `ги тест старт` as execution of the selected local
+  scenario. `gi test task` / `ги тест таск` selects its workload without running.
+  Follow `patterns/AGENTS_RUNTIME/09-testing.md` for authorization, evidence,
+  checkpoint/resume, restoration, and completion states. Projects own scenario
+  modes, settings, links, roles, inputs, commands, and artifact locations.
+- Include content entry when the selected test needs it: resolve authorized
+  material or permitted synthetic inputs, validate case/field mapping, confirm
+  acceptance, and track introduced content through cleanup/restoration. Keep
+  content values and source paths local; do not invent real IDs or links.
+- Use `gi full test`, `gi release test`, or `gi system test` for full-system
+  verification, following `patterns/AGENTS_RUNTIME/09-full-testing.md` as well.
+  Apply full-system resets only to that flow; an observational scenario uses
+  its own state contract. Old evidence and mocked/partial checks do not prove
+  a fresh live full-system run.
 - For verification plans and smoke checks, confirm exact CLI flags, ports,
   routes, methods, JSON payload fields, and required environment variables from
   current local instructions, manifests, config, or source code. Summaries and

@@ -77,6 +77,17 @@ test('network permission errors cannot poison a running TUN or combine across lo
  assert.equal(child.localFailure,true);
  assert.equal(isLocalCoreFailure('configure tun interface: create adapter: Cannot create a file when that file already exists.'),true);
 });
+
+test('DNS transport startup errors are local configuration failures with their safe reason',async()=>{
+ const context=vm.createContext({Date,coreDiagnostic,isLocalCoreFailure,log:()=>{}});
+ vm.runInContext(source.slice(source.indexOf('function readDiagnosticCoreLog('),source.indexOf('function corePath(')),context);
+ const child={};
+ context.readDiagnosticCoreLog(child,'sing-box','FATAL start service: start dns/udp[dns-direct]: detour to an empty direct outbound makes no sense','stderr');
+ assert.equal(child.localFailure,undefined);
+ assert.match(child.configFailureMessage,/Ошибка конфигурации DNS:/);
+ const f=fixture(Infinity);f.context.child.configFailureMessage=child.configFailureMessage;
+ await assert.rejects(f.context.waitForLocalPort(f.context.child,12345,20000,'sing-box',f.context.signal),error=>error.code==='LOCAL_CONFIG');
+});
 test('core output tracking stores only counts and fixed diagnostic categories',()=>{
  const logs=[];
  const context=vm.createContext({Date,coreDiagnostic,isLocalCoreFailure,log:message=>logs.push(message)});

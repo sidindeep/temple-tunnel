@@ -1,9 +1,8 @@
 # Agent Instructions
 
-This is the lightweight runtime entrypoint for this project. Shared rules live
-in focused modules under `patterns/AGENTS_RUNTIME/`; load only what the task
-needs and prefer more specific project-local instructions, contracts, memory,
-and runbooks over shared defaults.
+This runtime entrypoint uses focused modules under `patterns/AGENTS_RUNTIME/`.
+Load only needed modules; specific project instructions, contracts, memory, and
+runbooks override shared defaults.
 
 ## Project
 
@@ -11,23 +10,19 @@ Temple Tunnel is a Windows Electron client for VLESS subscriptions and per-app t
 
 ## Goal And Loading Contract
 
-- Derive a bounded goal and observable success criteria from the request and
-  project context. Ask only when missing information materially changes scope;
-  continue independent authorized work while waiting.
+- Derive a bounded goal and observable success criteria from request/context.
+  Ask only when missing information changes scope; continue independent authorized work.
 - This file alone is sufficient only for greetings and status-neutral replies.
   Before concrete work, select the matching runtime modules.
-- For a GI command, run
-  `tools/get-gi-context.ps1 -CommandText "<exact user command>"`. It performs the
-  staged update check, longest-prefix route resolution, and bounded retrieval.
-  Use `COMMANDS.md` directly only for help or command-index requests.
-- On the first concrete task in a session, perform the staged update check even
-  without a GI command. Equal versions with no explicit skipped migrations mean
-  `pending migrations: 0` without reading migration filenames, bodies,
-  `CHANGELOG.md`, or `INDEX.md`. When the
-  accepted source is newer, enumerate and apply pending accepted migrations if
-  enabled; absent `auto_apply_pending_migrations` defaults to `true`. Skip only
-  for explicit `false` or a concrete blocker, and report the pending count.
-  Never inspect `updates/` during this startup check.
+- For GI commands, run `tools/get-gi-context.ps1 -CommandText "<exact user command>"`
+  for staged update check, longest-prefix routing, and bounded retrieval.
+  Read `COMMANDS.md` directly only for help or command-index requests.
+- Run the staged update check on the session's first concrete task, even without
+  GI. Equal versions with no explicit skipped migrations mean `pending migrations: 0`;
+  do not read migration filenames/bodies, `CHANGELOG.md`, or `INDEX.md`. If accepted
+  source is newer, enumerate and apply pending accepted migrations; absent
+  `auto_apply_pending_migrations` means `true`. Skip only for explicit `false`
+  or a concrete blocker; report the pending count. Never inspect `updates/` at startup.
 - Treat “do/follow strictly by GI” and equivalents as strict compliance with all
   loaded rules. Report a blocked operation precisely and continue independent
   authorized work.
@@ -42,24 +37,29 @@ Temple Tunnel is a Windows Electron client for VLESS subscriptions and per-app t
 
 ## Core Safety And Boundaries
 
+- Before implementation, fixes, or refactoring, load modules 04, 06, and 15;
+  follow the mechanism gate in `patterns/ARCHITECTURE_AND_CODE_QUALITY.md`:
+  trace the scenario, correct causes at the contract owner, and justify bypasses.
 - Verify the active project root and target identity before writes. Treat this
   root as the normal filesystem boundary; exact external paths and actions need
   explicit authorization. Preserve unrelated dirty changes.
-- A pasted credential is not a blocker for unrelated work. Warn once without
-  repeating it, recommend rotation, and block only operations that cannot use it
-  safely.
+- Pasted credentials do not block unrelated work. Warn once without repeating
+  values, recommend rotation, and block only unsafe credential use.
+- Warn before third-party service launches; load runtime module 09.
 - Never commit secrets, private data, model weights, checkpoints, photos, video,
   audio, datasets, archives, or similar large content payloads. Use approved
   artifact storage and commit compact manifests, checksums, sources, or
   retrieval instructions unless the exact exception is explicitly approved.
-- `tools/` is for durable reusable development and agent tooling. Product code,
-  tests, docs, outputs, screenshots, exports, downloaded data, build bundles,
-  and one-off probes belong in documented project locations.
-  `tools/project-memory/` holds compact implementation-driving knowledge and
-  evidence references, not bulk artifacts or a replacement for source/tests.
-- During meaningful behavior or architecture work, keep scoped code, tests,
-  affected docs, and focused project-memory contracts aligned before the
-  implementation task is complete.
+- Keep rebuildable build output in dedicated ignored directories and out of
+  source Git; version build inputs. Follow
+  `patterns/AGENTS_RUNTIME/09-build-and-install.md` for authorized cleanup,
+  verification, and explicitly approved project exceptions.
+- `tools/` holds durable reusable development/agent tooling. Put product code,
+  tests, docs, outputs, screenshots, exports, downloads, bundles, and one-off probes
+  in documented project locations. `tools/project-memory/` holds compact knowledge
+  and evidence references, not bulk artifacts or replacements for source/tests.
+- Align scoped code, tests, docs, and project-memory contracts before completing
+  meaningful behavior or architecture work.
 - Do not revert user changes without an explicit request. Ask before destructive
   operations, broad formatting churn, dependency replacement, data migration,
   public contract changes, or unrelated expansion.
@@ -74,7 +74,8 @@ Temple Tunnel is a Windows Electron client for VLESS subscriptions and per-app t
 - Startup/restore: `07-startup.md`; scope/evidence/cleanup: `07-scope-and-evidence.md`
 - Config: `08-config-service.md`; task manager: `08-task-manager.md`; sprints: `08-sprint.md`
 - Publication: `09-production.md`; deploy: `09-deploy-gateway.md`; FTP: `09-ftp.md`
-- Runtime/restart/defaults: `09-runtime-and-defaults.md`; tests: `09-testing.md`
+- Runtime/restart/defaults: `09-runtime-and-defaults.md`; tester: `09-testing.md`;
+  full-system tests: `09-full-testing.md`
 - Build/install: `09-build-and-install.md`; memory operations: `09-project-memory-operations.md`
 - Private/missing context: `10-private-scope-and-missing-context.md`
 - Language: `11-language-preferences.md`; UI: `12-ui-and-focus.md`; progress: `13-progress-updates.md`
@@ -99,5 +100,4 @@ files are compatibility indexes only and contain no operational rules.
 
 ## Local Commands
 
-TODO: record install, run, test, build, and log-inspection commands in the
-project runbook or package-native configuration instead of expanding this file.
+TODO: record install/run/test/build/log commands in the runbook or package config.

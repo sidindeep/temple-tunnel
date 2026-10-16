@@ -27,7 +27,7 @@
           <span>◆</span>
           <p>Ключ подписки хранится зашифрованно средствами Windows.</p>
         </div>
-        <div class="version">Версия 0.14.2</div>
+      <div class="version" id="appVersion"></div>
       </aside>
 
       <main>
@@ -82,8 +82,12 @@
         </section>
 
         <section id="connectionPage" class="page">
+          <div class="connection-tabs" role="tablist" aria-label="Настройки туннелирования">
+            <button id="applicationsTab" class="connection-tab active" type="button" role="tab" data-connection-tab="applications" aria-controls="applicationsPanel" aria-selected="true" tabindex="0">Приложения</button>
+            <button id="sitesTab" class="connection-tab" type="button" role="tab" data-connection-tab="sites" aria-controls="sitesPanel" aria-selected="false" tabindex="-1">Сайты-исключения</button>
+          </div>
           <div id="contentGrid" class="content-grid">
-            <section id="applicationsPanel" class="panel applications-panel">
+            <section id="applicationsPanel" class="panel applications-panel" role="tabpanel" aria-labelledby="applicationsTab">
               <div class="panel-heading">
                 <div><p class="eyebrow">ПРИЛОЖЕНИЯ</p><h2 id="applicationsTitle">Раздельное туннелирование</h2></div>
                 <div class="app-actions"><button id="addAppButton" class="primary small" type="button">＋ EXE-файл</button><button id="listProcessesButton" class="secondary small" type="button">Диспетчер задач</button></div>
@@ -96,7 +100,16 @@
                 <span id="emptyAppsText">Нажмите «Добавить» и выберите EXE-файл.</span>
               </div>
             </section>
-
+            <section id="sitesPanel" class="panel sites-panel" role="tabpanel" aria-labelledby="sitesTab" hidden>
+              <div class="panel-heading"><div><p class="eyebrow">САЙТЫ</p><h2>Исключения из VPN</h2></div></div>
+              <p class="helper">Добавьте домен, чтобы сайт и его поддомены открывались напрямую. Исключения действуют во всех режимах.</p>
+              <form id="siteExceptionForm" class="site-exception-form">
+                <label for="siteExceptionInput">Исключить сайт из VPN</label>
+                <div><input id="siteExceptionInput" type="text" placeholder="Например, vk.ru" maxlength="253" autocomplete="off" /><button class="secondary small" type="submit">Добавить</button></div>
+              </form>
+              <p id="siteExceptionStatus" class="helper" role="status" aria-live="polite">Исключений пока нет. Добавьте домен выше.</p>
+              <div id="siteExceptionList" class="site-exception-list"></div>
+            </section>
           </div>
 
           <section class="connection-card">
@@ -110,12 +123,6 @@
               <button data-mode="bypass" class="active">Все, кроме выбранных</button>
             </div>
             <div id="modeDescription" class="mode-description"></div>
-            <form id="siteExceptionForm" class="site-exception-form">
-              <label for="siteExceptionInput">Исключить сайт из VPN</label>
-              <div><input id="siteExceptionInput" type="text" placeholder="vk.ru" maxlength="253" autocomplete="off" /><button class="secondary small" type="submit">Добавить</button></div>
-              <span id="siteExceptionStatus">Домен и его поддомены будут открываться напрямую.</span>
-              <div id="siteExceptionList" class="site-exception-list"></div>
-            </form>
             <label id="russianSitesControl" class="russian-sites-control" hidden>
               <input id="russianSitesViaVpn" type="checkbox" checked />
               <span>Российские сайты через VPN</span>
@@ -179,7 +186,7 @@
               <option value="google">Google · DNS over HTTPS</option>
               <option value="quad9">Quad9 · DNS over HTTPS</option>
             </select>
-            <p class="helper">DNS для прямых маршрутов остаётся системным. Доменные правила применяются и к DNS; правила IP-подсетей — к соединениям. Приложения с собственным зашифрованным DNS могут обходить доменные правила.</p>
+            <p class="helper">Доменные правила применяются и к DNS; правила IP-подсетей — к соединениям. В режиме «Только выбранные» DNS общей службы Windows идёт через VPN, кроме доменных исключений: служба не передаёт имя запросившего приложения. Приложения с собственным зашифрованным DNS могут обходить доменные правила.</p>
             <label for="dnsPolicy">Куда отправлять DNS</label>
             <select id="dnsPolicy"><option value="routing">Следовать правилам маршрутизации</option><option value="vpn">Все публичные DNS-запросы через VPN</option></select>
             <label for="ipv6Policy">IPv6 при работающем VPN</label>

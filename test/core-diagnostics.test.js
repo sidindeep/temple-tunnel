@@ -2,7 +2,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { PassThrough } = require('node:stream');
 const { once } = require('node:events');
-const { coreDiagnostic, attachCoreLogReader } = require('../src/file-log');
+const { coreDiagnostic, isLocalCoreFailure, attachCoreLogReader } = require('../src/file-log');
+
+test('DNS startup configuration errors cannot be misreported as a Windows TUN failure', () => {
+  const line = 'FATAL start service: start dns/udp[dns-direct]: detour to an empty direct outbound makes no sense';
+  assert.equal(isLocalCoreFailure(line), false);
+  assert.match(coreDiagnostic(line + ' password=secret 192.0.2.1'), /^Ошибка конфигурации DNS:/);
+  assert.doesNotMatch(coreDiagnostic(line + ' password=secret 192.0.2.1'), /secret|192\.0\.2\.1|TUN/);
+});
 
 test('common network failures have distinct useful reasons without raw details', () => {
   const cases = [

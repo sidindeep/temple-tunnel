@@ -62,14 +62,21 @@ script path.
 | `gi start sprint`, `gi старт спринт` | Start the active manager-backed Sprint/Cycle. |
 | `gi local sprint`, `gi sprint local` | Run a local checklist without task-manager mutation. |
 | `gi test plan`, `gi тест-план` | Build a verification plan from current contracts. |
-| `gi test task`, `ги тест таск` | Set the active release/full-system test task. |
-| `gi test`, `ги тест` | Run the documented full verification flow. |
+| `gi test task`, `ги тест таск` | Select the active project-local test scenario or workload. |
+| `gi test`, `ги тест` | Explain the tester, local scenarios, settings, required content, prerequisites, and gaps without running. |
+| `gi test start`, `ги тест старт` | Run the selected local scenario and save evidence/checkpoints; verify restoration. |
+| `gi full test`, `gi release test`, `gi system test` | Run documented full-system verification. |
 | `gi git summary`, `gi гит-обзор` | Summarize the latest commit without a full diff. |
 | `gi commit`, `gi коммит` | Commit scoped changes. |
 | `gi push`, `gi пуш`, `ги пуш`, `gi commit push` | Commit and push selected/task changes; without a task, all eligible current repository changes. |
+| `gi push all`, `ги пуш всё`, `ги пуш все` | Commit and push all eligible current repository changes, overriding the active-task default. |
 | `gi only push`, `gi только пуш` | Push existing commits without creating one. |
 | `gi pull`, `gi пул` | Fetch and pull the current branch. |
 | `gi update`, `gi обновить`, `gi обновись` | Apply accepted instruction-kit migrations. |
+
+For commit/push commands, if no eligible selected changes need a new commit,
+push existing outgoing commits after Git safety checks; do not create an empty
+commit or require a second command. Report each excluded remaining changed path.
 
 If a command needs a required parameter and the current message does not provide
 it, the routed contract decides whether the agent can infer it or must ask one

@@ -460,6 +460,7 @@ function publicState() {
   const savedSubscriptions = subscriptions();
   const active = savedSubscriptions.find((item) => item.id === state.activeSubscriptionId) || savedSubscriptions[0];
   return {
+    version: app.getVersion(),
     subscriptionConfigured: savedSubscriptions.length > 0 || Boolean(state.subscriptionEncrypted),
     subscriptions: savedSubscriptions.map((item) => ({
       id: item.id,
@@ -712,6 +713,7 @@ function readDiagnosticCoreLog(child, coreName, chunk, streamName) {
     child.localFailureMessage = coreDiagnostic(message);
   }
   const diagnostic = coreDiagnostic(message);
+  if (diagnostic.startsWith('Ошибка конфигурации DNS:')) child.configFailureMessage = diagnostic;
   if (!diagnostic) return;
   child.startupLastDiagnostic = diagnostic;
   if (child.lastDiagnostic === diagnostic && Date.now() - child.lastDiagnosticAt < 1000) return;
@@ -823,6 +825,7 @@ async function waitForVerifiedTunnel(child, port, timeoutMs = 8000, signal, stag
   while (Date.now() < deadline) {
     if (signal?.aborted) throw connectionError('ABORT_ERR', 'Подключение отменено.');
     if (child.startError) throw child.startError;
+    if (child.configFailureMessage) throw connectionError('LOCAL_CONFIG', child.configFailureMessage);
     if (child.localFailure) throw connectionError('TUN_FAILED', child.localFailureMessage || connectionErrorMessages.local);
     if (child.exitCode !== null) throw connectionError('ENGINE_FAILED', 'VPN-ядро завершилось до установки соединения.');
     const authBefore = (child.authErrorCount || 0) + (xrayProcess?.authErrorCount || 0);
@@ -886,6 +889,7 @@ async function waitForLocalPort(child, port, timeoutMs = 8000, processName = 'Xr
     if (!slowReported && Date.now() - startedAt >= 5000) { slowReported = true; onSlow(); }
     if (signal?.aborted) throw connectionError('ABORT_ERR', 'Подключение отменено.');
     if (child.startError) throw child.startError;
+    if (child.configFailureMessage) throw connectionError('LOCAL_CONFIG', child.configFailureMessage);
     if (child.localFailure) throw connectionError('TUN_FAILED', child.localFailureMessage || connectionErrorMessages.local);
     if (child.exitCode !== null) throw connectionError('ENGINE_FAILED', `${processName} завершился до запуска локального прокси.`);
     try {

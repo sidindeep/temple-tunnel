@@ -44,6 +44,46 @@ test('bypass mode sends listed processes direct and defaults to proxy', () => {
   assert.equal(config.dns.rules.find((item) => item.process_path).server, 'dns-direct');
 });
 
+test('selected mode routes shared Windows DNS through VPN without widening application traffic', () => {
+  const config = buildConfig({ server, mode: 'selected',
+    applications: [{ path: 'C:\\Apps\\ChatGPT.exe' }],
+    customRouting: { direct: ['example.ru'], block: ['blocked.example'] },
+    ruleSetPaths: { geoipRu: 'geoip-ru.srs', geositeRu: 'geosite-category-ru.srs' } });
+  function dnsDestination(domain, processName, processPath = '') {
+    const rule = config.dns.rules.find(item => {
+      if (item.rule_set) return false; // No regional membership for these synthetic domains.
+      if (item.domain_suffix && !item.domain_suffix.some(suffix =>
+        domain === suffix || domain.endsWith(suffix.startsWith('.') ? suffix : `.${suffix}`))) return false;
+      if (item.process_name && !item.process_name.includes(processName)) return false;
+      if (item.process_path && !item.process_path.includes(processPath)) return false;
+      return true;
+    });
+    return rule?.action === 'reject' ? 'reject' : rule?.server || config.dns.final;
+  }
+  assert.equal(dnsDestination('public.example', 'svchost.exe'), 'dns-proxy');
+  assert.equal(dnsDestination('public.example', 'ChatGPT.exe', 'C:\\Apps\\ChatGPT.exe'), 'dns-proxy');
+  assert.equal(dnsDestination('public.example', 'other.exe'), 'dns-direct');
+  assert.equal(dnsDestination('api.example.ru', 'svchost.exe'), 'dns-direct');
+  assert.equal(dnsDestination('device.lan', 'svchost.exe'), 'dns-direct');
+  assert.equal(dnsDestination('blocked.example', 'svchost.exe'), 'reject');
+  const sharedIndex = config.dns.rules.findIndex(rule => rule.process_name?.includes('svchost.exe'));
+  assert.ok(sharedIndex > config.dns.rules.findIndex(rule => rule.rule_set));
+  assert.equal(config.route.final, 'direct');
+  assert.equal(config.route.rules.some(rule => rule.process_name?.includes('svchost.exe')), false);
+});
+
+test('shared Windows DNS fallback is limited to selected mode with routing DNS policy', () => {
+  for (const mode of ['full', 'selected', 'bypass']) {
+    for (const dnsPolicy of ['routing', 'vpn']) {
+      const config = buildConfig({ server, mode, dnsPolicy, applications: [{ processName: 'test.exe' }] });
+      assert.equal(config.dns.rules.some(rule => rule.process_name?.includes('svchost.exe')),
+        mode === 'selected' && dnsPolicy === 'routing');
+      if (dnsPolicy === 'vpn') assert.ok(config.dns.rules.some(rule =>
+        rule.server === 'dns-proxy' && !rule.process_name && !rule.process_path));
+    }
+  }
+});
+
 test('system-disabled IPv6 omits IPv6 addressing while retaining strict routing and IPv4 DNS', () => {
   for (const ipv6Policy of ['block', 'tunnel']) {
     const config = buildConfig({ server, mode: 'full', applications: [], systemIPv6Disabled: true, ipv6Policy });

@@ -23,6 +23,8 @@ class Element {
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   setAttribute(name, value) { this.attributes[name] = value; }
+  getAttribute(name) { return this.attributes[name]; }
+  focus() { this.focused = true; }
   addEventListener(name, fn) { this.listeners[name] = fn; }
   querySelector() { return this.children[0]; }
   querySelectorAll() { return []; }
@@ -39,10 +41,17 @@ async function fixture() {
   const modes = ['full', 'selected', 'bypass'].map(mode => {
     const node = new Element(); node.dataset.mode = mode; return node;
   });
+  const connectionTabs = [...html.matchAll(/id="([^"]+)"[^>]+data-connection-tab="([^"]+)" aria-controls="([^"]+)"/g)].map(match => {
+    const node = nodes.get(match[1]);
+    node.dataset.connectionTab = match[2];
+    node.setAttribute('aria-controls', match[3]);
+    return node;
+  });
   nodes.get('statusBadge').append(new Element());
   const calls = [];
   let changed;
   let state = {
+    version: '9.8.7',
     status: 'disconnected', mode: 'full', applications: [], logs: [], subscriptions: [],
     servers: [
       { id: 'a', name: 'Finland', transport: 'tcp', security: 'reality', supported: true, latencyStatus: 'unmeasured' },
@@ -56,11 +65,22 @@ async function fixture() {
     toggleTunnel: async () => { calls.push('power'); return state; },
     pingServers: async () => { calls.push('ping'); return state; },
     openProcessPicker: async () => { calls.push('process-picker'); },
+    addDirectRoute: async domain => {
+      calls.push({ addDirectRoute: domain });
+      state = { ...state, customRouting: { ...state.customRouting, direct: [...(state.customRouting?.direct || []), domain] } };
+      return state;
+    },
+    removeDirectRoute: async domain => {
+      calls.push({ removeDirectRoute: domain });
+      state = { ...state, customRouting: { ...state.customRouting, direct: state.customRouting.direct.filter(item => item !== domain) } };
+      return state;
+    },
     restoreSettingsBackup: async () => { calls.push('restore-backup'); state = { ...state, storageReadOnly:false, storageBackupAvailable:false }; return state; }
   };
   const document = {
     getElementById: id => { assert.ok(nodes.has(id), `Unknown HTML id ${id}`); return nodes.get(id); },
-    querySelectorAll: selector => selector === '.nav' ? nav : selector === '[data-mode]' ? modes : [],
+    querySelectorAll: selector => selector === '.nav' ? nav : selector === '[data-mode]' ? modes
+      : selector === '[data-connection-tab]' ? connectionTabs : [],
     createElement: () => new Element(), addEventListener() {}
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/app.js'), 'utf8'), {
@@ -72,6 +92,7 @@ async function fixture() {
 
 test('navigation moves management to its own page and home search preserves selection', async () => {
   const { nodes, nav, calls } = await fixture();
+  assert.equal(nodes.get('appVersion').textContent, 'Версия 9.8.7');
   await nodes.get('homeManageButton').click();
   assert.equal(nodes.get('connectionPage').classList.contains('active'), true);
   assert.equal(nodes.get('pageTitle').textContent, 'Управление подключением');
@@ -129,4 +150,73 @@ test('process button opens a separate picker window', async () => {
   await nodes.get('listProcessesButton').click();
   assert.deepEqual(calls, ['process-picker']);
   assert.equal(nodes.has('runningProcesses'), false);
+});
+
+test('management tabs preserve their selection and input across VPN updates and navigation', async () => {
+  const { nodes, nav, calls, update } = await fixture();
+  const apps = nodes.get('applicationsTab');
+  const sites = nodes.get('sitesTab');
+  assert.equal(nodes.get('applicationsPanel').hidden, false);
+  assert.equal(nodes.get('sitesPanel').hidden, true);
+  assert.equal(apps.attributes['aria-selected'], 'true');
+  assert.equal(apps.tabIndex, 0);
+  assert.equal(sites.tabIndex, -1);
+  await nodes.get('homeManageButton').click();
+  await sites.click();
+  nodes.get('siteExceptionInput').value = 'draft.example';
+  update({ status: 'connected', mode: 'selected' });
+  assert.equal(nodes.get('applicationsPanel').hidden, true);
+  assert.equal(nodes.get('sitesPanel').hidden, false);
+  assert.equal(sites.attributes['aria-selected'], 'true');
+  await nav.find(node => node.dataset.page === 'home').click();
+  await nodes.get('homeManageButton').click();
+  assert.equal(nodes.get('sitesPanel').hidden, false);
+  assert.equal(nodes.get('siteExceptionInput').value, 'draft.example');
+  assert.equal(calls.length, 0);
+  await apps.click();
+  assert.equal(nodes.get('applicationsPanel').hidden, false);
+  assert.equal(nodes.get('sitesPanel').hidden, true);
+});
+
+test('management tabs support keyboard selection and focus with wrapping', async () => {
+  const { nodes, calls } = await fixture();
+  const apps = nodes.get('applicationsTab');
+  const sites = nodes.get('sitesTab');
+  const key = (node, name) => {
+    let prevented = false;
+    node.listeners.keydown({ key: name, preventDefault() { prevented = true; } });
+    return prevented;
+  };
+  assert.equal(key(apps, 'ArrowLeft'), true);
+  assert.equal(sites.focused, true);
+  assert.equal(sites.tabIndex, 0);
+  assert.equal(apps.tabIndex, -1);
+  key(sites, 'ArrowRight');
+  assert.equal(apps.focused, true);
+  assert.equal(apps.attributes['aria-selected'], 'true');
+  key(apps, 'End');
+  assert.equal(sites.attributes['aria-selected'], 'true');
+  key(sites, 'Home');
+  assert.equal(apps.attributes['aria-selected'], 'true');
+  assert.equal(key(apps, 'Tab'), false);
+  assert.equal(calls.length, 0);
+});
+
+test('site tab adds and removes exceptions in full protection without switching panels', async () => {
+  const { nodes, calls } = await fixture();
+  await nodes.get('sitesTab').click();
+  const input = nodes.get('siteExceptionInput');
+  const form = nodes.get('siteExceptionForm');
+  input.value = 'example.com';
+  await form.listeners.submit({ preventDefault() {} });
+  assert.equal(input.value, '');
+  const list = nodes.get('siteExceptionList');
+  assert.equal(list.children.length, 1);
+  assert.equal(list.children[0].children[0].textContent, 'example.com');
+  assert.equal(nodes.get('siteExceptionStatus').textContent, 'Всего исключений: 1.');
+  assert.equal(nodes.get('sitesPanel').hidden, false);
+  await list.children[0].children[1].click();
+  assert.equal(list.children.length, 0);
+  assert.match(nodes.get('siteExceptionStatus').textContent, /Исключений пока нет/);
+  assert.deepEqual(calls, [{ addDirectRoute: 'example.com' }, { removeDirectRoute: 'example.com' }]);
 });

@@ -47,3 +47,12 @@ VLESS keys, decrypted profiles, or raw core output into project memory.
 README.md says kill-switch packet behavior still needs administrator-level
 verification. The bootstrap did not install dependencies, run tests, build,
 launch the app, or alter system routing.
+
+## GI tester entrypoint
+
+GI chat commands: `gi test` explains local scenarios; `gi test start` executes
+the selected scenario; `gi full test` requests full-system verification.
+Current commands, smoke checks, and verification limits are listed above.
+Use `templates/PROJECT_TESTING.template.md` if a canonical scenario inventory
+is needed. Keep required content, approved sources or synthetic preparation,
+destination fields, input acceptance, and cleanup/retention in the local contract.

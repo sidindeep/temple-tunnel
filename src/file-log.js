@@ -108,8 +108,8 @@ async function createFileLog(directory, { protect, unprotect, maxBytes = 5 * 102
 function isLocalCoreFailure(message) {
   const text = String(message);
   if (!/error|fatal|fail|denied|not permitted|cannot/i.test(text)) return false;
-  return /create adapter|open existing adapter|configure tun|create tun|open tun|initialize wintun/i.test(text)
-    || (/fatal/i.test(text) && /start service|wintun|tun interface|listen/i.test(text));
+  return /create adapter|open existing adapter|configure tun|create tun|open tun|initialize (?:wintun|tun)/i.test(text)
+    || (/fatal/i.test(text) && /wintun|tun interface|inbound\/tun/i.test(text));
 }
 
 function coreDiagnostic(message) {
@@ -117,6 +117,7 @@ function coreDiagnostic(message) {
   if (/create adapter|open existing adapter/.test(text) && /already exists|not found/.test(text)) return 'Windows ещё освобождает предыдущий VPN-адаптер: конфликт создания Wintun.';
   if (/open interface.*too much time/.test(text)) return 'Windows задерживает открытие VPN-адаптера.';
   if (/authentication failed|invalid user|invalid password/.test(text)) return 'Сервер отклонил авторизацию.';
+  if (/detour to an empty direct outbound makes no sense/.test(text)) return 'Ошибка конфигурации DNS: ядро отклонило лишний detour на прямой выход.';
   if (isLocalCoreFailure(text)) {
     const phase = [
       [/set ipv6 address/, 'назначение IPv6'], [/set ipv4 address/, 'назначение IPv4'],
